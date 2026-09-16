@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT_IDS = new Set((process.env.ALLOWED_CHAT_IDS || '').split(',').map(x => x.trim()).filter(Boolean));
-const POLL_SECONDS = Math.max(30, Number(process.env.POLL_SECONDS || 60));
+const POLL_SECONDS = Math.max(1, Number(process.env.POLL_SECONDS || 60));
 const MIN_MULTIPLE = Math.max(1, Number(process.env.MIN_MULTIPLE || 5));
 const CADE_HOME = process.env.CADE_HOME || 'https://cade.market/';
 const FEE = Number(process.env.CADE_FEE || 0.03);

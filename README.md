@@ -22,15 +22,15 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 
 ```text
 TELEGRAM_BOT_TOKEN=your_bot_token
-ALLOWED_CHAT_IDS=your_numeric_telegram_chat_id
-POLL_SECONDS=60
+ALLOWED_CHAT_IDS=
+POLL_SECONDS=1
 MIN_MULTIPLE=5
 CADE_FEE=0.03
 MAX_MARKETS=30
 ALERT_STAKE=100
 ```
 
-`ALLOWED_CHAT_IDS` is strongly recommended. It prevents strangers who discover the bot username from using it. Multiple IDs can be comma-separated.
+`ALLOWED_CHAT_IDS` is optional. Leave it blank if you do not want a chat allow-list; in that case, anyone who finds the bot can use it. Multiple IDs can be comma-separated.
 
 4. Deploy. The service starts with `npm start`.
 5. Open the bot in Telegram and send `/start`, then `/alerts`.
