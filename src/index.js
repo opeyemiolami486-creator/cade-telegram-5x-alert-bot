@@ -11,11 +11,11 @@ const FEE = Number(process.env.CADE_FEE || 0.03);
 const MAX_MARKETS = Math.max(1, Number(process.env.MAX_MARKETS || 30));
 const ALERT_STAKE = Math.max(0.01, Number(process.env.ALERT_STAKE || 100));
 const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30));
-const BUILD_VERSION = '8f2d1b7-otp-fallback-diagnostics';
+const BUILD_VERSION = 'result-tracking-settlement-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
-const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map(), markets: [], lastScan: null, tradeSessions: new Map() };
+const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map(), calls: new Map(), markets: [], lastScan: null, tradeSessions: new Map() };
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -70,11 +70,11 @@ async function discoverMarkets() {
   return [...mints];
 }
 
-async function readMarketsForMint(tokenMint) {
+async function readMarketsForMint(tokenMint, includeResolved = false) {
   const data = await fetchText(`${CADE_HOME}api/meme-madness/markets?token_mint=${encodeURIComponent(tokenMint)}`);
   const json = JSON.parse(data);
   const markets = Array.isArray(json.markets) ? json.markets : [];
-  return markets.filter(m => m.status === 'open' || m.phase === 'continuous').map(m => {
+  return markets.filter(m => m.status === 'open' || m.phase === 'continuous' || (includeResolved && m.status === 'resolved' && m.settlement_state === 'settled')).map(m => {
     const outcomes = Array.isArray(m.outcomes) ? m.outcomes : [];
     const higherRaw = outcomes.find(o => o.index === 0)?.net_stake_raw;
     const lowerRaw = outcomes.find(o => o.index === 1)?.net_stake_raw;
@@ -87,6 +87,8 @@ async function readMarketsForMint(tokenMint) {
       lower: Number(lowerRaw) / 1e6,
       cutoff: m.order_cutoff_at || '',
       close: m.close_at || '',
+      status: m.status || m.phase || '',
+      winningOutcomeIndex: Number.isInteger(m.winning_outcome_index) ? m.winning_outcome_index : null,
       updatedAt: Date.now()
     };
   });
@@ -97,15 +99,25 @@ async function scan() {
   const results = [];
   for (const tokenMint of urls) {
     try {
-      const markets = await readMarketsForMint(tokenMint);
+      const markets = await readMarketsForMint(tokenMint, true);
       for (const market of markets) {
-        if (Number.isFinite(market.higher) && Number.isFinite(market.lower)) results.push(market);
+        if (market.status === 'resolved') updateResolvedCalls(market);
+        if ((market.status === 'open' || market.status === 'continuous') && Number.isFinite(market.higher) && Number.isFinite(market.lower)) results.push(market);
       }
     } catch (e) { console.error('market read failed', tokenMint, e.message); }
   }
   state.markets = results;
   state.lastScan = Date.now();
   return results;
+}
+
+function updateResolvedCalls(market) {
+  if (!Number.isInteger(market.winningOutcomeIndex)) return;
+  for (const call of state.calls.values()) {
+    if (call.marketId !== market.id || call.status !== 'pending') continue;
+    call.status = call.sideIndex === market.winningOutcomeIndex ? 'won' : 'lost';
+    call.resolvedAt = Date.now();
+  }
 }
 
 function marketLine(m, stake = 100) {
@@ -116,6 +128,17 @@ function marketLine(m, stake = 100) {
 
 function alertText(m, side, result, stake = 100) {
   return `🚨 <b>CADE ${MIN_MULTIPLE}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
+}
+
+function resultText(chatId) {
+  const calls = [...state.calls.values()].filter(call => call.chatIds.has(String(chatId))).sort((a, b) => b.alertedAt - a.alertedAt);
+  const won = calls.filter(call => call.status === 'won');
+  if (!calls.length) return send(chatId, 'No alert calls have been recorded for this chat yet. Calls are recorded only while the bot is running, and are verified after Cade settles the market.');
+  const lines = calls.slice(0, 20).map(call => {
+    const status = call.status === 'won' ? '✅ WON' : call.status === 'lost' ? '❌ LOST' : '⏳ PENDING';
+    return `${status} <a href="${esc(call.url)}">$${esc(call.symbol)}</a> — ${call.side.toUpperCase()} — alert ${call.multiple.toFixed(2)}× — ${new Date(call.alertedAt).toLocaleString()}`;
+  });
+  return send(chatId, `<b>Verified alert results</b>\n\nSuccessful settled calls: <b>${won.length}</b>\nTracked calls: <b>${calls.length}</b>\n\n${lines.join('\n')}\n\nThese are paper-call results based on the alert stake. The bot does not confirm that you placed a trade or received a payout.`);
 }
 
 async function telegram(method, body = {}) {
@@ -256,7 +279,7 @@ async function handleMessage(message) {
   const [rawCommand, a, b] = input.split(/\s+/);
   const command = rawCommand.toLowerCase().split('@')[0];
 
-  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
+  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
   if (command === '/trade') return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (command === '/email') return submitEmail(chatId, a || '');
   if (command === '/resend') return resendOtp(chatId);
@@ -265,6 +288,7 @@ async function handleMessage(message) {
   if (command === '/alerts') { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
   if (command === '/stop') { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat. Send /alerts to enable them again.'); }
   if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
+  if (command === '/result') return resultText(chatId);
 
   if (command === '/markets') {
     const markets = state.markets.length ? state.markets : await scan();
@@ -313,11 +337,28 @@ async function alertLoop() {
         const key = `${m.url}|${side}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
         if (state.sent.has(key)) continue;
         state.sent.set(key, Date.now());
+        state.calls.set(key, {
+          key,
+          marketId: m.id,
+          symbol: m.symbol,
+          url: m.url,
+          side,
+          sideIndex: side === 'higher' ? 0 : 1,
+          stake: ALERT_STAKE,
+          multiple: result.multiple,
+          totalReturn: result.totalReturn,
+          profit: result.profit,
+          probability: result.probability,
+          alertedAt: Date.now(),
+          chatIds: new Set(state.subscribers),
+          status: 'pending'
+        });
         for (const chatId of state.subscribers) await send(chatId, alertText(m, side, result, ALERT_STAKE));
       }
     }
     // Keep memory bounded while retaining enough state to prevent repeat spam.
     for (const [key, time] of state.sent) if (Date.now() - time > 6 * 60 * 60 * 1000) state.sent.delete(key);
+    for (const [key, call] of state.calls) if (Date.now() - call.alertedAt > 7 * 24 * 60 * 60 * 1000) state.calls.delete(key);
   } catch (e) { console.error('scan error', e.message); }
   setTimeout(alertLoop, POLL_SECONDS * 1000);
 }

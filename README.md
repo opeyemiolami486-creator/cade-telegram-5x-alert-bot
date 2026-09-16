@@ -13,6 +13,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/alerts` — enable automatic alerts for this chat
 - `/stop` — disable automatic alerts for this chat until `/alerts` is used again
 - `/status` — show scanner status
+- `/result` — list alert calls and their verified settled outcomes
 - `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
 - `/email you@example.com` — provide the Cade login email for the active preview
 - `/otp 123456` — provide the one-time code for the active preview
@@ -49,7 +50,9 @@ To find your numeric Telegram chat ID, temporarily omit `ALLOWED_CHAT_IDS`, send
 
 The bot scans public market links discovered from Cade's home page. It sends at most one alert for each unique market/side/pool snapshot, so it does not repeatedly spam the same unchanged opportunity. `ALERT_STAKE` controls the example amount shown in automatic alerts; the 5× threshold itself is a multiple, so it is independent of stake size.
 
-A “5×+ opportunity” means the estimated **total return**, including the original stake, is strictly greater than five times the stake. For a $100 stake, that means an estimated total return greater than $500. Automatic alerts also require more than `MIN_SECONDS_LEFT` seconds before Cade’s order cutoff; the default is 30 seconds.
+A “5×+ opportunity” means the estimated **total return**, including the original stake, is strictly greater than five times the stake. For a $100 stake, that means an estimated total return greater than $500. The estimate uses the live Higher/Lower net pools, adds the hypothetical stake to the selected pool, and applies `CADE_FEE`; it is conditional pool math, not a guaranteed profit or a prediction of the winner. Automatic alerts also require more than `MIN_SECONDS_LEFT` seconds before Cade’s order cutoff; the default is 30 seconds.
+
+`/result` tracks alert calls in memory and checks the same market later for Cade’s settled `winning_outcome_index`. It reports WON or LOST only after settlement. Because the bot is read-only, these are paper-call outcomes based on the configured `ALERT_STAKE`; the bot does not verify that a real trade was placed or that a payout was received. Results reset when the service restarts.
 
 ## Headless browser preview
 
