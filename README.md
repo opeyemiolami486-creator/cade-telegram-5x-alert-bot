@@ -11,6 +11,8 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/estimate higher 100` — estimate HIGHER for $100 across current markets
 - `/estimate lower 100` — estimate LOWER for $100 across current markets
 - `/opportunity 2x` — set this chat's automatic-alert threshold to 2×+
+- `/arbitrage on` — enable two-sided hedge alerts
+- `/arbitrage off` — disable two-sided hedge alerts
 - `/alerts` — enable automatic alerts for this chat
 - `/stop` — disable automatic alerts for this chat until `/alerts` is used again
 - `/status` — show scanner status
@@ -57,6 +59,8 @@ A “5×+ opportunity” means the estimated **total return**, including the ori
 `/result` tracks alert calls in memory and checks the same market later for Cade’s settled `winning_outcome_index`. It reports WON or LOST only after settlement. Because the bot is read-only, these are paper-call outcomes based on the configured `ALERT_STAKE`; the bot does not verify that a real trade was placed or that a payout was received. Results reset when the service restarts.
 
 Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportunity 3x`, or `/opportunity 5x`. The setting also enables alerts for that chat. If no personal threshold is set, `MIN_MULTIPLE` is used. A user receives an alert only when the modeled total-return multiple is strictly greater than that user’s threshold.
+
+`/arbitrage on` enables a separate two-sided hedge scan. It solves for the Higher/Lower stake split that equalizes the modeled payout and alerts only when the minimum payout across either outcome is at least `ARBITRAGE_MIN_MULTIPLE` times the combined paper stake. This is a strict mathematical screen, not a guarantee: pools can move, fees and limits can differ, both accounts may not execute, and Cade may prohibit multi-account hedging. It remains read-only and never places either trade.
 
 ## Headless browser preview
 
