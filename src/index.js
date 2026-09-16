@@ -16,6 +16,15 @@ const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const timeLeft = iso => {
+  const seconds = Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000));
+  if (!Number.isFinite(seconds)) return 'unknown';
+  if (seconds <= 0) return 'CLOSED';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s` : `${m}m ${String(s).padStart(2, '0')}s`;
+};
 
 function parseAmount(raw) {
   const m = String(raw || '').replace(/[$,\s]/g, '').toUpperCase().match(/^(-?[\d.]+)([KMB])?$/);
@@ -71,6 +80,7 @@ async function readMarketsForMint(tokenMint) {
       symbol,
       higher: Number(higherRaw) / 1e6,
       lower: Number(lowerRaw) / 1e6,
+      cutoff: m.order_cutoff_at || '',
       close: m.close_at || '',
       updatedAt: Date.now()
     };
@@ -96,11 +106,11 @@ async function scan() {
 function marketLine(m, stake = 100) {
   const h = estimate(m, 'higher', stake);
   const l = estimate(m, 'lower', stake);
-  return `• <a href="${esc(m.url)}">$${esc(m.symbol)}</a> — H ${pct(h?.probability)} → ${money(h?.totalReturn)} | L ${pct(l?.probability)} → ${money(l?.totalReturn)}`;
+  return `• <a href="${esc(m.url)}">$${esc(m.symbol)}</a> — H ${pct(h?.probability)} → ${money(h?.totalReturn)} | L ${pct(l?.probability)} → ${money(l?.totalReturn)} | <b>time left: ${timeLeft(m.cutoff)}</b>`;
 }
 
 function alertText(m, side, result, stake = 100) {
-  return `🚨 <b>CADE ${MIN_MULTIPLE}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
+  return `🚨 <b>CADE ${MIN_MULTIPLE}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
 }
 
 async function telegram(method, body = {}) {
@@ -145,7 +155,7 @@ async function handleMessage(message) {
     const markets = state.markets.length ? state.markets : await scan();
     const lines = markets.map(m => { const r = estimate(m, side, stake); return r ? { m, r } : null; }).filter(Boolean);
     if (!lines.length) return send(chatId, 'No readable public markets are available for that estimate.');
-    return send(chatId, `<b>${side.toUpperCase()} estimates for ${money(stake)}</b>\n\n${lines.map(({m,r}) => `<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — return <b>${money(r.totalReturn)}</b>, profit ${money(r.profit)}, implied chance ${pct(r.probability)}`).join('\n')}`);
+    return send(chatId, `<b>${side.toUpperCase()} estimates for ${money(stake)}</b>\n\n${lines.map(({m,r}) => `<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — return <b>${money(r.totalReturn)}</b>, profit ${money(r.profit)}, implied chance ${pct(r.probability)}, time left <b>${timeLeft(m.cutoff)}</b>`).join('\n')}`);
   }
   return send(chatId, 'Unknown command. Try /markets, /estimate higher 100, /alerts, or /status.');
 }
