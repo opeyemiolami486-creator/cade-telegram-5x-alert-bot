@@ -1,6 +1,6 @@
 # Cade.market Telegram Monitor
 
-A **read-only** Telegram bot for Railway. It reads public Cade.market market pages, estimates returns using the visible HIGHER/LOWER pools and Cade's displayed 3% fee, responds to commands, and sends an alert when a $100 example stake exceeds the configured multiple.
+A **read-only** Telegram bot for Railway. It reads Cade.market's public market JSON endpoint, estimates returns using live HIGHER/LOWER pools and Cade's displayed 3% fee, responds to commands, and sends an alert when a $100 example stake exceeds the configured multiple.
 
 It does **not** log in to Cade, handle wallet keys, or place trades.
 

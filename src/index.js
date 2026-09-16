@@ -45,36 +45,48 @@ async function fetchText(url) {
 async function discoverMarkets() {
   const html = await fetchText(CADE_HOME);
   const $ = cheerio.load(html);
-  const links = new Map();
+  const mints = new Set();
   $('a[href*="/meme-madness/market/"]').each((_, a) => {
     const href = $(a).attr('href');
     if (!href) return;
     const url = new URL(href, CADE_HOME).href;
     const match = url.match(/\/market\/([^/?#]+)/);
-    if (match) links.set(match[1], url);
+    if (match) mints.add(match[1]);
   });
-  return [...links.values()].slice(0, MAX_MARKETS);
+  return [...mints];
 }
 
-async function readMarket(url) {
-  const html = await fetchText(url);
-  const $ = cheerio.load(html);
-  const text = $('body').text().replace(/\s+/g, ' ');
-  const symbol = (text.match(/Will \$?([A-Za-z0-9_-]+) close higher/i) || [])[1] || (text.match(/Will \$?([A-Za-z0-9_-]+)'s market cap/i) || [])[1] || 'market';
-  const higher = poolFromText(text, 'HIGHER VOLUME');
-  const lower = poolFromText(text, 'LOWER VOLUME');
-  const close = (text.match(/PREDICTIONS CLOSE IN\s+([^ ]+\s*[^ ]*)/i) || [])[1] || '';
-  return { url, symbol, higher, lower, close, text, updatedAt: Date.now() };
+async function readMarketsForMint(tokenMint) {
+  const data = await fetchText(`${CADE_HOME}api/meme-madness/markets?token_mint=${encodeURIComponent(tokenMint)}`);
+  const json = JSON.parse(data);
+  const markets = Array.isArray(json.markets) ? json.markets : [];
+  return markets.filter(m => m.status === 'open' || m.phase === 'continuous').map(m => {
+    const outcomes = Array.isArray(m.outcomes) ? m.outcomes : [];
+    const higherRaw = outcomes.find(o => o.index === 0)?.net_stake_raw;
+    const lowerRaw = outcomes.find(o => o.index === 1)?.net_stake_raw;
+    const symbol = m.resolution_config?.tokenSymbol || tokenMint.slice(0, 6);
+    return {
+      id: m.id,
+      url: `${CADE_HOME}meme-madness/market/${tokenMint}`,
+      symbol,
+      higher: Number(higherRaw) / 1e6,
+      lower: Number(lowerRaw) / 1e6,
+      close: m.close_at || '',
+      updatedAt: Date.now()
+    };
+  });
 }
 
 async function scan() {
   const urls = await discoverMarkets();
   const results = [];
-  for (const url of urls) {
+  for (const tokenMint of urls) {
     try {
-      const market = await readMarket(url);
-      if (Number.isFinite(market.higher) && Number.isFinite(market.lower)) results.push(market);
-    } catch (e) { console.error('market read failed', url, e.message); }
+      const markets = await readMarketsForMint(tokenMint);
+      for (const market of markets) {
+        if (Number.isFinite(market.higher) && Number.isFinite(market.lower)) results.push(market);
+      }
+    } catch (e) { console.error('market read failed', tokenMint, e.message); }
   }
   state.markets = results;
   state.lastScan = Date.now();
