@@ -13,6 +13,10 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/alerts` — enable automatic alerts for this chat
 - `/stop` — disable automatic alerts for this chat
 - `/status` — show scanner status
+- `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
+- `/email you@example.com` — provide the Cade login email for the active preview
+- `/otp 123456` — provide the one-time code for the active preview
+- `/cancel` — close the headless browser session without submitting
 
 ## Railway setup
 
@@ -42,6 +46,10 @@ To find your numeric Telegram chat ID, temporarily omit `ALLOWED_CHAT_IDS`, send
 The bot scans public market links discovered from Cade's home page. It sends at most one alert for each unique market/side/pool snapshot, so it does not repeatedly spam the same unchanged opportunity. `ALERT_STAKE` controls the example amount shown in automatic alerts; the 5× threshold itself is a multiple, so it is independent of stake size.
 
 A “5×+ opportunity” means the estimated **total return**, including the original stake, is strictly greater than five times the stake. For a $100 stake, that means an estimated total return greater than $500.
+
+## Headless browser preview
+
+The `/trade` workflow runs Chromium headlessly on Railway, so no desktop browser is needed on the phone. It opens Cade's email login, accepts the email and one-time code through Telegram, navigates to the selected market, and sends a fresh preview with the time remaining. The current implementation deliberately stops before clicking any final trade or wallet-signing control. It does not store the OTP after the session and does not accept passwords, seed phrases, or private keys.
 
 ## Caveats
 

@@ -5,13 +5,15 @@
   "description": "Read-only Telegram alerts and winnings estimates for public Cade.market markets.",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "postinstall": "npx playwright install chromium"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
-    "dotenv": "^16.4.7"
+    "dotenv": "^16.4.7",
+    "playwright": "^1.55.0"
   }
 }

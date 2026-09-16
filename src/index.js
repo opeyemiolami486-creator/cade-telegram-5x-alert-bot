@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import * as cheerio from 'cheerio';
+import { chromium } from 'playwright';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT_IDS = new Set((process.env.ALLOWED_CHAT_IDS || '').split(',').map(x => x.trim()).filter(Boolean));
@@ -12,7 +13,7 @@ const ALERT_STAKE = Math.max(0.01, Number(process.env.ALERT_STAKE || 100));
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
-const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map(), markets: [], lastScan: null };
+const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map(), markets: [], lastScan: null, tradeSessions: new Map() };
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -124,6 +125,53 @@ async function send(chatId, text) {
   await telegram('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
+async function beginTradePreview(chatId, symbol, side, stake) {
+  const market = state.markets.find(m => m.symbol.toLowerCase() === symbol.toLowerCase());
+  if (!market) return send(chatId, `I cannot find an open market for <b>${esc(symbol)}</b>. Send /markets first and use the exact token symbol.`);
+  if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
+  if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'email' });
+  await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.getByRole('button', { name: /SIGN IN WITH EMAIL/i }).click();
+  return send(chatId, `Headless Cade browser ready for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b> with <b>${money(stake)}</b>.\n\nSend your email with:\n<code>/email you@example.com</code>\n\nYour OTP will be used only in this temporary browser session and will not be saved.`);
+}
+
+async function submitEmail(chatId, email) {
+  const session = state.tradeSessions.get(String(chatId));
+  if (!session || session.step !== 'email') return send(chatId, 'Start with <code>/trade SYMBOL higher 100</code>.');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(chatId, 'That email format is not valid. Try <code>/email you@example.com</code>.');
+  await session.page.locator('input[type="email"]').last().fill(email);
+  await session.page.getByRole('button', { name: /CONTINUE|SEND CODE|EMAIL/i }).last().click();
+  session.step = 'otp';
+  return send(chatId, 'OTP requested. Send it with <code>/otp 123456</code>. Do not send your password, wallet seed phrase, or private key.');
+}
+
+async function submitOtp(chatId, otp) {
+  const session = state.tradeSessions.get(String(chatId));
+  if (!session || session.step !== 'otp') return send(chatId, 'No login session is waiting for an OTP. Start with /trade.');
+  if (!/^\d{4,8}$/.test(otp)) return send(chatId, 'OTP should contain only 4–8 digits.');
+  const field = session.page.locator('input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]').first();
+  await field.fill(otp);
+  await field.press('Enter').catch(() => {});
+  await session.page.waitForTimeout(1500);
+  await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const result = estimate(session.market, session.side, session.stake);
+  session.step = 'preview';
+  if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
+  return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nThe browser is logged in and the market page is open headlessly, but this bot will not click the final trade or wallet-signing controls. This protects you from accidental real-money orders.\n\nUse /cancel to close the session.`);
+}
+
+async function endTradeSession(chatId) {
+  const session = state.tradeSessions.get(String(chatId));
+  if (!session) return;
+  state.tradeSessions.delete(String(chatId));
+  await session.context.close().catch(() => {});
+  await session.browser.close().catch(() => {});
+}
+
 function authorized(chatId) {
   return ALLOWED_CHAT_IDS.size === 0 || ALLOWED_CHAT_IDS.has(String(chatId));
 }
@@ -137,6 +185,10 @@ async function handleMessage(message) {
   const [command, a, b] = input.split(/\s+/);
 
   if (/^\/start/i.test(command)) return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
+  if (/^\/trade/i.test(command)) return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
+  if (/^\/email/i.test(command)) return submitEmail(chatId, a || '');
+  if (/^\/otp/i.test(command)) return submitOtp(chatId, a || '');
+  if (/^\/cancel/i.test(command)) { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
   if (/^\/alerts/i.test(command)) { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
   if (/^\/stop/i.test(command)) { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat.'); }
   if (/^\/status/i.test(command)) return send(chatId, `Scanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
