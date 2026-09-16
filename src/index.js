@@ -132,12 +132,22 @@ async function beginTradePreview(chatId, symbol, side, stake) {
   if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
   await send(chatId, `Starting a headless Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await Promise.race([
+    chromium.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Chromium launch timed out after 20 seconds; check Railway Playwright installation logs.')), 20000))
+  ]);
+  await send(chatId, 'Headless Chromium started on Railway. Loading Cade login…');
   const context = await browser.newContext();
   const page = await context.newPage();
   state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'email' });
-  await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.getByRole('button', { name: /SIGN IN WITH EMAIL/i }).click();
+  await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  await send(chatId, 'Cade login page loaded. Opening email login…');
+  const emailButton = page.getByRole('button', { name: /SIGN IN WITH EMAIL/i });
+  await emailButton.waitFor({ state: 'visible', timeout: 10000 });
+  await emailButton.click({ timeout: 10000 });
   return send(chatId, `Headless Cade browser ready for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b> with <b>${money(stake)}</b>.\n\nSend your email with:\n<code>/email you@example.com</code>\n\nYour OTP will be used only in this temporary browser session and will not be saved.`);
 }
 
