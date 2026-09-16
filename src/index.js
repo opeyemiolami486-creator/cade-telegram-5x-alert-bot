@@ -14,7 +14,7 @@ const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30))
 const ARBITRAGE_STAKE = Math.max(0.01, Number(process.env.ARBITRAGE_STAKE || 100));
 const ARBITRAGE_MIN_MULTIPLE = Math.max(1, Number(process.env.ARBITRAGE_MIN_MULTIPLE || 2));
 const TRUSTED_MIN_PROFIT = 0.30;
-const BUILD_VERSION = 'trusted-amount-v1';
+const BUILD_VERSION = 'amount-aware-search-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -22,6 +22,7 @@ const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), thresholds: n
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const paperAmount = (chatId, symbol) => state.amounts.get(`${chatId}|${String(symbol).toUpperCase()}`) || ALERT_STAKE;
 const authDialog = page => page.getByRole('dialog');
 const visibleOtpField = page => page.locator('input[name="one-time-code"]:visible, input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
 const timeLeft = iso => {
@@ -363,8 +364,7 @@ async function handleMessage(message) {
   if (command === '/markets') {
     const markets = state.markets.length ? state.markets : await scan();
     if (!markets.length) return send(chatId, 'No readable public Cade markets found right now.');
-    const stake = 100;
-    return send(chatId, `<b>Current Cade markets</b>\nAssuming ${money(stake)} stake:\n\n${markets.map(m => marketLine(m, stake)).join('\n')}`);
+    return send(chatId, `<b>Current Cade markets</b>\nUsing each token's configured paper amount (default ${money(ALERT_STAKE)}):\n\n${markets.map(m => marketLine(m, paperAmount(chatId, m.symbol))).join('\n')}`);
   }
 
   if (command === '/estimate') {
@@ -402,18 +402,21 @@ async function alertLoop() {
       for (const side of ['higher', 'lower']) {
         const secondsLeft = (new Date(m.cutoff).getTime() - Date.now()) / 1000;
         if (!Number.isFinite(secondsLeft) || secondsLeft <= MIN_SECONDS_LEFT) continue;
-        const result = estimate(m, side, ALERT_STAKE);
-        if (!result) continue;
         const recipients = new Map();
         for (const chatId of state.subscribers) {
           const threshold = state.thresholds.get(String(chatId)) || MIN_MULTIPLE;
+          const stake = paperAmount(chatId, m.symbol);
+          const result = estimate(m, side, stake);
+          if (!result) continue;
           if (result.multiple > threshold) {
-            if (!recipients.has(threshold)) recipients.set(threshold, new Set());
-            recipients.get(threshold).add(String(chatId));
+            const groupKey = `${threshold}|${stake}`;
+            if (!recipients.has(groupKey)) recipients.set(groupKey, { threshold, stake, chatIds: new Set() });
+            recipients.get(groupKey).chatIds.add(String(chatId));
           }
         }
-        for (const [threshold, chatIds] of recipients) {
-          const key = `${m.url}|${side}|${threshold}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
+        for (const { threshold, stake, chatIds } of recipients.values()) {
+          const result = estimate(m, side, stake);
+          const key = `${m.url}|${side}|${threshold}|${Math.round(stake * 100)}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
           if (state.sent.has(key)) continue;
           state.sent.set(key, Date.now());
           state.calls.set(key, {
@@ -423,7 +426,7 @@ async function alertLoop() {
             url: m.url,
             side,
             sideIndex: side === 'higher' ? 0 : 1,
-            stake: ALERT_STAKE,
+            stake,
             threshold,
             multiple: result.multiple,
             totalReturn: result.totalReturn,
@@ -433,7 +436,7 @@ async function alertLoop() {
             chatIds,
             status: 'pending'
           });
-          for (const chatId of chatIds) await send(chatId, alertText(m, side, result, ALERT_STAKE, threshold));
+          for (const chatId of chatIds) await send(chatId, alertText(m, side, result, stake, threshold));
         }
       }
       const hedge = hedgeEstimate(m, ARBITRAGE_STAKE);
@@ -448,7 +451,7 @@ async function alertLoop() {
       if (state.trusted.size) {
         const trustedSide = m.higher >= m.lower ? 'higher' : 'lower';
         for (const chatId of state.trusted) {
-          const stake = state.amounts.get(`${chatId}|${String(m.symbol).toUpperCase()}`) || ALERT_STAKE;
+          const stake = paperAmount(chatId, m.symbol);
           const trustedResult = estimate(m, trustedSide, stake);
           if (!trustedResult || trustedResult.profit / stake < TRUSTED_MIN_PROFIT) continue;
           const key = `${m.url}|trusted|${chatId}|${Math.round(stake * 100)}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
