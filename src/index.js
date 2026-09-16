@@ -11,7 +11,7 @@ const FEE = Number(process.env.CADE_FEE || 0.03);
 const MAX_MARKETS = Math.max(1, Number(process.env.MAX_MARKETS || 30));
 const ALERT_STAKE = Math.max(0.01, Number(process.env.ALERT_STAKE || 100));
 const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30));
-const BUILD_VERSION = '4df9536-otp-live-selectors';
+const BUILD_VERSION = '8f2d1b7-otp-fallback-diagnostics';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -20,7 +20,7 @@ const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimu
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const authDialog = page => page.getByRole('dialog');
-const visibleOtpField = page => authDialog(page).locator('input[name="one-time-code"]:visible, input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
+const visibleOtpField = page => page.locator('input[name="one-time-code"]:visible, input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
 const timeLeft = iso => {
   const seconds = Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000));
   if (!Number.isFinite(seconds)) return 'unknown';
@@ -173,16 +173,16 @@ async function submitEmail(chatId, email) {
   if (!session || session.step !== 'email') return send(chatId, 'Start with <code>/trade SYMBOL higher 100</code>.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(chatId, 'That email format is not valid. Try <code>/email you@example.com</code>.');
   await send(chatId, 'Submitting the email to Cade/Privy and waiting for the login response…');
-  const emailField = authDialog(session.page).locator('input[autocomplete="email"]:visible, input[type="email"]:visible').last();
+  const emailField = session.page.locator('[role="dialog"] input[autocomplete="email"]:visible, [role="dialog"] input[type="email"]:visible').last();
   await emailField.waitFor({ state: 'visible', timeout: 10000 });
   await emailField.fill(email);
-  const submitButton = session.page.getByRole('button', { name: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last();
+  const submitButton = session.page.locator('[role="dialog"] button').filter({ hasText: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last();
   await submitButton.waitFor({ state: 'visible', timeout: 10000 });
   await submitButton.click({ timeout: 10000 });
   const otpField = visibleOtpField(session.page);
   await Promise.race([
     otpField.waitFor({ state: 'visible', timeout: 15000 }),
-    authDialog(session.page).getByText(/CHECK YOUR EMAIL|VERIFICATION CODE/i).waitFor({ state: 'visible', timeout: 15000 })
+    session.page.getByText(/CHECK YOUR EMAIL|VERIFICATION CODE/i).last().waitFor({ state: 'visible', timeout: 30000 })
   ]).catch(() => {});
   const visibleText = await session.page.locator('body').innerText();
   if (/captcha|verify you are human|robot|turnstile|recaptcha/i.test(visibleText)) {
@@ -193,7 +193,8 @@ async function submitEmail(chatId, email) {
   }
   const codeVisible = await otpField.isVisible().catch(() => false);
   if (!codeVisible && !/check your email|enter.*code|verification code|code sent/i.test(visibleText)) {
-    return send(chatId, `Cade did not show its OTP entry screen after 15 seconds (build ${BUILD_VERSION}). The email submit step may not have completed; use /cancel and /trade again, then check Railway logs.`);
+    const authState = visibleText.match(/(?:SIGN IN|SIGN IN WITH EMAIL|EMAIL ADDRESS|EMAIL ME A CODE|CHECK YOUR EMAIL|VERIFICATION CODE|INVALID EMAIL|ERROR|FAILED|CAPTCHA|VERIFY YOU ARE HUMAN)[^\n]*/gi)?.slice(-6).join(' | ') || 'no recognizable Privy status text';
+    return send(chatId, `Cade did not show its OTP entry screen after 30 seconds (build ${BUILD_VERSION}). Privy state: <code>${esc(authState.slice(0, 700))}</code>\n\nUse /cancel and /trade again. If this repeats, send me the Privy state above.`);
   }
   session.step = 'otp';
   return send(chatId, 'OTP requested. Send it with <code>/otp 123456</code>. Do not send your password, wallet seed phrase, or private key.');
