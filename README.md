@@ -21,7 +21,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 ## Railway setup
 
 1. Create a bot with Telegram's **BotFather** and copy its bot token.
-2. Create a new Railway service from this repository.
+2. Create a new Railway service from this repository. Railway will detect the included `Dockerfile` and use the official Playwright image, which includes Chromium and its Linux system libraries.
 3. Set these Railway variables:
 
 ```text
@@ -38,6 +38,8 @@ ALERT_STAKE=100
 
 4. Deploy. The service starts with `npm start`.
 5. Open the bot in Telegram and send `/start`, then `/alerts`.
+
+The Dockerfile is required for the headless browser. Do not override the Railway start command with a bare Node runtime that omits the Playwright base image.
 
 To find your numeric Telegram chat ID, temporarily omit `ALLOWED_CHAT_IDS`, send `/status` to the bot, and add the ID after checking Railway logs or use a trusted Telegram ID helper. Then redeploy with the allow-list set.
 
