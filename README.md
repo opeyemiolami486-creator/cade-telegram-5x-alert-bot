@@ -32,6 +32,7 @@ MIN_MULTIPLE=5
 CADE_FEE=0.03
 MAX_MARKETS=30
 ALERT_STAKE=100
+MIN_SECONDS_LEFT=30
 ```
 
 `ALLOWED_CHAT_IDS` is optional. Leave it blank if you do not want a chat allow-list; in that case, anyone who finds the bot can use it. Multiple IDs can be comma-separated.
@@ -47,7 +48,7 @@ To find your numeric Telegram chat ID, temporarily omit `ALLOWED_CHAT_IDS`, send
 
 The bot scans public market links discovered from Cade's home page. It sends at most one alert for each unique market/side/pool snapshot, so it does not repeatedly spam the same unchanged opportunity. `ALERT_STAKE` controls the example amount shown in automatic alerts; the 5× threshold itself is a multiple, so it is independent of stake size.
 
-A “5×+ opportunity” means the estimated **total return**, including the original stake, is strictly greater than five times the stake. For a $100 stake, that means an estimated total return greater than $500.
+A “5×+ opportunity” means the estimated **total return**, including the original stake, is strictly greater than five times the stake. For a $100 stake, that means an estimated total return greater than $500. Automatic alerts also require more than `MIN_SECONDS_LEFT` seconds before Cade’s order cutoff; the default is 30 seconds.
 
 ## Headless browser preview
 

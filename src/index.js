@@ -10,6 +10,7 @@ const CADE_HOME = process.env.CADE_HOME || 'https://cade.market/';
 const FEE = Number(process.env.CADE_FEE || 0.03);
 const MAX_MARKETS = Math.max(1, Number(process.env.MAX_MARKETS || 30));
 const ALERT_STAKE = Math.max(0.01, Number(process.env.ALERT_STAKE || 100));
+const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30));
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -254,6 +255,8 @@ async function alertLoop() {
     const markets = await scan();
     for (const m of markets) {
       for (const side of ['higher', 'lower']) {
+        const secondsLeft = (new Date(m.cutoff).getTime() - Date.now()) / 1000;
+        if (!Number.isFinite(secondsLeft) || secondsLeft <= MIN_SECONDS_LEFT) continue;
         const result = estimate(m, side, ALERT_STAKE);
         if (!result || result.multiple <= MIN_MULTIPLE) continue;
         const key = `${m.url}|${side}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
