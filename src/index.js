@@ -155,8 +155,17 @@ async function submitEmail(chatId, email) {
   const session = state.tradeSessions.get(String(chatId));
   if (!session || session.step !== 'email') return send(chatId, 'Start with <code>/trade SYMBOL higher 100</code>.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(chatId, 'That email format is not valid. Try <code>/email you@example.com</code>.');
-  await session.page.locator('input[type="email"]').last().fill(email);
-  await session.page.getByRole('button', { name: /CONTINUE|SEND CODE|EMAIL/i }).last().click();
+  await send(chatId, 'Submitting the email to Cade/Privy and waiting for the login response…');
+  await session.page.locator('input[autocomplete="email"], input[type="email"]').last().fill(email);
+  await session.page.getByRole('button', { name: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last().click({ timeout: 10000 });
+  await session.page.waitForTimeout(2500);
+  const visibleText = await session.page.locator('body').innerText();
+  if (/captcha|verify you are human|robot|turnstile|recaptcha/i.test(visibleText)) {
+    return send(chatId, 'Cade/Privy is requiring a CAPTCHA in the headless browser, so the OTP was not confirmed as sent. This cannot be safely bypassed. Use a manual Cade login/browser handoff, or try again later if the CAPTCHA is not shown.');
+  }
+  if (/invalid email|error|failed|try again|unable/i.test(visibleText) && !/check your email|enter.*code|verification code/i.test(visibleText)) {
+    return send(chatId, 'Cade/Privy returned a login error and no OTP screen appeared. Check the email address and Railway logs, then try /cancel followed by /trade again.');
+  }
   session.step = 'otp';
   return send(chatId, 'OTP requested. Send it with <code>/otp 123456</code>. Do not send your password, wallet seed phrase, or private key.');
 }
