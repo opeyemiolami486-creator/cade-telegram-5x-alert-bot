@@ -14,7 +14,8 @@ const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30))
 const ARBITRAGE_STAKE = Math.max(0.01, Number(process.env.ARBITRAGE_STAKE || 100));
 const ARBITRAGE_MIN_MULTIPLE = Math.max(1, Number(process.env.ARBITRAGE_MIN_MULTIPLE || 2));
 const TRUSTED_MIN_PROFIT = 0.30;
-const BUILD_VERSION = 'amount-aware-search-v1';
+const TRUSTED_MIN_SECONDS_LEFT = 30;
+const BUILD_VERSION = 'trusted-close-window-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -454,6 +455,8 @@ async function alertLoop() {
         }
       }
       if (state.trusted.size) {
+        const trustedSecondsToClose = (new Date(m.close).getTime() - Date.now()) / 1000;
+        if (!Number.isFinite(trustedSecondsToClose) || trustedSecondsToClose < TRUSTED_MIN_SECONDS_LEFT) continue;
         const trustedSide = m.higher >= m.lower ? 'higher' : 'lower';
         for (const chatId of state.trusted) {
           const stake = paperAmount(chatId, m.symbol);
