@@ -16,6 +16,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
 - `/email you@example.com` — provide the Cade login email for the active preview
 - `/otp 123456` — provide the one-time code for the active preview
+- `/resend` — ask Cade/Privy to send the code again
 - `/cancel` — close the headless browser session without submitting
 
 ## Railway setup

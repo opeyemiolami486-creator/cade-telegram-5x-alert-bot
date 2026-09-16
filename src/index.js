@@ -167,8 +167,21 @@ async function submitEmail(chatId, email) {
   if (/invalid email|error|failed|try again|unable/i.test(visibleText) && !/check your email|enter.*code|verification code/i.test(visibleText)) {
     return send(chatId, 'Cade/Privy returned a login error and no OTP screen appeared. Check the email address and Railway logs, then try /cancel followed by /trade again.');
   }
+  const codeVisible = await session.page.locator('input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]').first().isVisible().catch(() => false);
+  if (!codeVisible && !/check your email|enter.*code|verification code|code sent/i.test(visibleText)) {
+    return send(chatId, 'Cade did not show its OTP entry screen, so delivery was not confirmed. Try /resend once, then check spam/junk and verify the email address.');
+  }
   session.step = 'otp';
   return send(chatId, 'OTP requested. Send it with <code>/otp 123456</code>. Do not send your password, wallet seed phrase, or private key.');
+}
+
+async function resendOtp(chatId) {
+  const session = state.tradeSessions.get(String(chatId));
+  if (!session || session.step !== 'otp') return send(chatId, 'No active OTP screen. Start with /trade, then /email.');
+  const resend = session.page.getByRole('button', { name: /RESEND|SEND AGAIN/i }).first();
+  if (!(await resend.isVisible().catch(() => false))) return send(chatId, 'Cade has not enabled resend yet. Wait a few seconds, then try /resend again.');
+  await resend.click({ timeout: 10000 });
+  return send(chatId, 'Resend requested from Cade/Privy. Check inbox and spam/junk folders for the new code.');
 }
 
 async function submitOtp(chatId, otp) {
@@ -209,6 +222,7 @@ async function handleMessage(message) {
   if (/^\/start/i.test(command)) return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
   if (/^\/trade/i.test(command)) return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (/^\/email/i.test(command)) return submitEmail(chatId, a || '');
+  if (/^\/resend/i.test(command)) return resendOtp(chatId);
   if (/^\/otp/i.test(command)) return submitOtp(chatId, a || '');
   if (/^\/cancel/i.test(command)) { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
   if (/^\/alerts/i.test(command)) { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
