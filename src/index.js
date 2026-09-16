@@ -22,7 +22,7 @@ const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), thresholds: n
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-const paperAmount = (chatId, symbol) => state.amounts.get(`${chatId}|${String(symbol).toUpperCase()}`) || ALERT_STAKE;
+const paperAmount = (chatId, symbol) => state.amounts.get(`${chatId}|${String(symbol).toUpperCase()}`) || state.amounts.get(`${chatId}|*`) || ALERT_STAKE;
 const authDialog = page => page.getByRole('dialog');
 const visibleOtpField = page => page.locator('input[name="one-time-code"]:visible, input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
 const timeLeft = iso => {
@@ -347,6 +347,11 @@ async function handleMessage(message) {
   if (command === '/amount') {
     const symbol = String(a || '').toUpperCase();
     const amount = Number(b);
+    if (b == null && Number.isFinite(Number(a))) {
+      if (Number(a) <= 0 || Number(a) > 1_000_000) return send(chatId, 'Amount must be between $0.01 and $1,000,000. Example: <code>/amount 1500</code>.');
+      state.amounts.set(`${chatId}|*`, Number(a));
+      return send(chatId, `Default paper amount for <b>all tokens</b> set to <b>${money(Number(a))}</b>. A token-specific amount can override it with <code>/amount JOHN 250</code>.`);
+    }
     if (!symbol) return send(chatId, 'Usage: <code>/amount JOHN 250</code>. This sets the paper amount used for JOHN signals.');
     if (b == null) {
       const saved = state.amounts.get(`${chatId}|${symbol}`);

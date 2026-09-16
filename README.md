@@ -12,7 +12,8 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/estimate lower 100` — estimate LOWER for $100 across current markets
 - `/opportunity 2x` — set this chat's automatic-alert threshold to 2×+
 - `/trusted on` — choose the higher-implied-probability side when modeled profit is at least 30%
-- `/amount JOHN 250` — use a $250 paper amount for JOHN trusted signals
+- `/amount 1500` — use $1,500 for every token in this chat
+- `/amount JOHN 250` — override the default with $250 for JOHN
 - `/arbitrage on` — enable two-sided hedge alerts
 - `/arbitrage off` — disable two-sided hedge alerts
 - `/alerts` — enable automatic alerts for this chat
@@ -62,7 +63,7 @@ A “5×+ opportunity” means the estimated **total return**, including the ori
 
 Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportunity 3x`, or `/opportunity 5x`. The setting also enables alerts for that chat. If no personal threshold is set, `MIN_MULTIPLE` is used. A user receives an alert only when the modeled total-return multiple is strictly greater than that user’s threshold.
 
-`/trusted on` enables a conservative signal filter that chooses the side with the higher current implied pool probability and requires modeled profit of at least 30% for the configured paper amount. `/amount SYMBOL VALUE` sets the paper amount separately for each chat and token; that amount is used by automatic opportunity searches, trusted signals, and `/markets` estimates. Without a setting, `ALERT_STAKE` is used. “Trusted” is only a label for this filter and does not mean the outcome is guaranteed.
+`/trusted on` enables a conservative signal filter that chooses the side with the higher current implied pool probability and requires modeled profit of at least 30% for the configured paper amount. `/amount VALUE` sets a chat-wide paper amount for every token, while `/amount SYMBOL VALUE` overrides it for one token. The amount is used by automatic opportunity searches, trusted signals, and `/markets` estimates. Without a setting, `ALERT_STAKE` is used. “Trusted” is only a label for this filter and does not mean the outcome is guaranteed.
 
 `/arbitrage on` enables a separate two-sided hedge scan. It solves for the Higher/Lower stake split that equalizes the modeled payout and alerts only when the minimum payout across either outcome is at least `ARBITRAGE_MIN_MULTIPLE` times the combined paper stake. This is a strict mathematical screen, not a guarantee: pools can move, fees and limits can differ, both accounts may not execute, and Cade may prohibit multi-account hedging. It remains read-only and never places either trade.
 
