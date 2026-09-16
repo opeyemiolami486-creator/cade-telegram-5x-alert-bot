@@ -11,7 +11,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/estimate higher 100` — estimate HIGHER for $100 across current markets
 - `/estimate lower 100` — estimate LOWER for $100 across current markets
 - `/alerts` — enable automatic alerts for this chat
-- `/stop` — disable automatic alerts for this chat
+- `/stop` — disable automatic alerts for this chat until `/alerts` is used again
 - `/status` — show scanner status
 - `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
 - `/email you@example.com` — provide the Cade login email for the active preview
@@ -53,7 +53,7 @@ A “5×+ opportunity” means the estimated **total return**, including the ori
 
 ## Headless browser preview
 
-The `/trade` workflow runs Chromium headlessly on Railway, so no desktop browser is needed on the phone. It opens Cade's email login, accepts the email and one-time code through Telegram, navigates to the selected market, and sends a fresh preview with the time remaining. The current implementation deliberately stops before clicking any final trade or wallet-signing control. It does not store the OTP after the session and does not accept passwords, seed phrases, or private keys.
+The `/trade` workflow runs Chromium headlessly on Railway, so no desktop browser is needed on the phone. It waits for Cade's Privy login modal to hydrate, opens the visible email-login form, accepts the email and one-time code through Telegram, waits for the OTP screen to complete, navigates to the selected market, and sends a fresh preview with the time remaining. The current implementation deliberately stops before clicking any final trade or wallet-signing control. It does not store the OTP after the session and does not accept passwords, seed phrases, or private keys. Telegram commands sent as `/stop@your_bot` are also supported.
 
 ## Caveats
 

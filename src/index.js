@@ -133,23 +133,30 @@ async function beginTradePreview(chatId, symbol, side, stake) {
   if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
   await send(chatId, `Starting a headless Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
-  const browser = await Promise.race([
-    chromium.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
-    }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Chromium launch timed out after 20 seconds; check Railway Playwright installation logs.')), 20000))
-  ]);
-  await send(chatId, 'Headless Chromium started on Railway. Loading Cade login…');
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'email' });
-  await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  await send(chatId, 'Cade login page loaded. Opening email login…');
-  const emailButton = page.getByRole('button', { name: /SIGN IN WITH EMAIL/i });
-  await emailButton.waitFor({ state: 'visible', timeout: 10000 });
-  await emailButton.click({ timeout: 10000 });
-  return send(chatId, `Headless Cade browser ready for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b> with <b>${money(stake)}</b>.\n\nSend your email with:\n<code>/email you@example.com</code>\n\nYour OTP will be used only in this temporary browser session and will not be saved.`);
+  let browser;
+  try {
+    browser = await Promise.race([
+      chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Chromium launch timed out after 20 seconds; check Railway Playwright installation logs.')), 20000))
+    ]);
+    await send(chatId, 'Headless Chromium started on Railway. Loading Cade login…');
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'email' });
+    await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await send(chatId, 'Cade login page loaded. Opening email login…');
+    const emailButton = page.getByRole('button', { name: /SIGN IN WITH EMAIL/i });
+    await emailButton.waitFor({ state: 'visible', timeout: 15000 });
+    await emailButton.click({ timeout: 10000 });
+    return send(chatId, `Headless Cade browser ready for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b> with <b>${money(stake)}</b>.\n\nSend your email with:\n<code>/email you@example.com</code>\n\nYour OTP will be used only in this temporary browser session and will not be saved.`);
+  } catch (error) {
+    if (browser) await browser.close().catch(() => {});
+    state.tradeSessions.delete(String(chatId));
+    throw error;
+  }
 }
 
 async function submitEmail(chatId, email) {
@@ -157,9 +164,13 @@ async function submitEmail(chatId, email) {
   if (!session || session.step !== 'email') return send(chatId, 'Start with <code>/trade SYMBOL higher 100</code>.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(chatId, 'That email format is not valid. Try <code>/email you@example.com</code>.');
   await send(chatId, 'Submitting the email to Cade/Privy and waiting for the login response…');
-  await session.page.locator('input[autocomplete="email"], input[type="email"]').last().fill(email);
-  await session.page.getByRole('button', { name: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last().click({ timeout: 10000 });
-  await session.page.waitForTimeout(2500);
+  const emailField = session.page.locator('input[autocomplete="email"]:visible, input[type="email"]:visible').last();
+  await emailField.waitFor({ state: 'visible', timeout: 10000 });
+  await emailField.fill(email);
+  const submitButton = session.page.getByRole('button', { name: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last();
+  await submitButton.waitFor({ state: 'visible', timeout: 10000 });
+  await submitButton.click({ timeout: 10000 });
+  await session.page.waitForTimeout(1500);
   const visibleText = await session.page.locator('body').innerText();
   if (/captcha|verify you are human|robot|turnstile|recaptcha/i.test(visibleText)) {
     return send(chatId, 'Cade/Privy is requiring a CAPTCHA in the headless browser, so the OTP was not confirmed as sent. This cannot be safely bypassed. Use a manual Cade login/browser handoff, or try again later if the CAPTCHA is not shown.');
@@ -167,7 +178,7 @@ async function submitEmail(chatId, email) {
   if (/invalid email|error|failed|try again|unable/i.test(visibleText) && !/check your email|enter.*code|verification code/i.test(visibleText)) {
     return send(chatId, 'Cade/Privy returned a login error and no OTP screen appeared. Check the email address and Railway logs, then try /cancel followed by /trade again.');
   }
-  const codeVisible = await session.page.locator('input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]').first().isVisible().catch(() => false);
+  const codeVisible = await session.page.locator('input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first().isVisible().catch(() => false);
   if (!codeVisible && !/check your email|enter.*code|verification code|code sent/i.test(visibleText)) {
     return send(chatId, 'Cade did not show its OTP entry screen, so delivery was not confirmed. Try /resend once, then check spam/junk and verify the email address.');
   }
@@ -188,10 +199,22 @@ async function submitOtp(chatId, otp) {
   const session = state.tradeSessions.get(String(chatId));
   if (!session || session.step !== 'otp') return send(chatId, 'No login session is waiting for an OTP. Start with /trade.');
   if (!/^\d{4,8}$/.test(otp)) return send(chatId, 'OTP should contain only 4–8 digits.');
-  const field = session.page.locator('input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]').first();
+  const field = session.page.locator('input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
+  await field.waitFor({ state: 'visible', timeout: 10000 });
   await field.fill(otp);
   await field.press('Enter').catch(() => {});
-  await session.page.waitForTimeout(1500);
+  await session.page.waitForTimeout(1000);
+  await session.page.waitForFunction(() => {
+    const fields = [...document.querySelectorAll('input[autocomplete="one-time-code"], input[inputmode="numeric"], input[type="tel"]')];
+    return !fields.some(field => {
+      const style = getComputedStyle(field);
+      return style.display !== 'none' && style.visibility !== 'hidden' && field.getClientRects().length > 0;
+    });
+  }, { timeout: 15000 }).catch(() => {});
+  const loginText = await session.page.locator('body').innerText().catch(() => '');
+  if (/invalid|incorrect|expired|try again/i.test(loginText) && await field.isVisible().catch(() => false)) {
+    return send(chatId, 'Cade rejected that OTP. Check the latest code in your inbox and try <code>/otp 123456</code> again, or use /resend.');
+  }
   await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   const result = estimate(session.market, session.side, session.stake);
   session.step = 'preview';
@@ -216,27 +239,27 @@ async function handleMessage(message) {
   if (!chatId || !authorized(chatId)) return;
   const input = (message.text || '').trim();
   if (!input) return;
-  state.subscribers.add(String(chatId));
-  const [command, a, b] = input.split(/\s+/);
+  const [rawCommand, a, b] = input.split(/\s+/);
+  const command = rawCommand.toLowerCase().split('@')[0];
 
-  if (/^\/start/i.test(command)) return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
-  if (/^\/trade/i.test(command)) return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
-  if (/^\/email/i.test(command)) return submitEmail(chatId, a || '');
-  if (/^\/resend/i.test(command)) return resendOtp(chatId);
-  if (/^\/otp/i.test(command)) return submitOtp(chatId, a || '');
-  if (/^\/cancel/i.test(command)) { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
-  if (/^\/alerts/i.test(command)) { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
-  if (/^\/stop/i.test(command)) { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat.'); }
-  if (/^\/status/i.test(command)) return send(chatId, `Scanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
+  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
+  if (command === '/trade') return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
+  if (command === '/email') return submitEmail(chatId, a || '');
+  if (command === '/resend') return resendOtp(chatId);
+  if (command === '/otp') return submitOtp(chatId, a || '');
+  if (command === '/cancel') { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
+  if (command === '/alerts') { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
+  if (command === '/stop') { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat. Send /alerts to enable them again.'); }
+  if (command === '/status') return send(chatId, `Scanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
 
-  if (/^\/markets/i.test(command)) {
+  if (command === '/markets') {
     const markets = state.markets.length ? state.markets : await scan();
     if (!markets.length) return send(chatId, 'No readable public Cade markets found right now.');
     const stake = 100;
     return send(chatId, `<b>Current Cade markets</b>\nAssuming ${money(stake)} stake:\n\n${markets.map(m => marketLine(m, stake)).join('\n')}`);
   }
 
-  if (/^\/estimate/i.test(command)) {
+  if (command === '/estimate') {
     const side = String(a || '').toLowerCase();
     const stake = Number(b);
     if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/estimate higher 100</code> or <code>/estimate lower 100</code>');
