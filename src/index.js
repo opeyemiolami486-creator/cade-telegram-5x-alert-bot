@@ -126,10 +126,12 @@ async function send(chatId, text) {
 }
 
 async function beginTradePreview(chatId, symbol, side, stake) {
+  if (!state.markets.length) await scan();
   const market = state.markets.find(m => m.symbol.toLowerCase() === symbol.toLowerCase());
   if (!market) return send(chatId, `I cannot find an open market for <b>${esc(symbol)}</b>. Send /markets first and use the exact token symbol.`);
   if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
+  await send(chatId, `Starting a headless Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -215,7 +217,15 @@ async function handleMessage(message) {
 async function pollTelegram() {
   try {
     const updates = await telegram('getUpdates', { offset: state.offset, timeout: 25, allowed_updates: ['message'] });
-    for (const update of updates) { state.offset = update.update_id + 1; if (update.message) await handleMessage(update.message); }
+    for (const update of updates) {
+      state.offset = update.update_id + 1;
+      if (!update.message) continue;
+      try { await handleMessage(update.message); }
+      catch (e) {
+        console.error('message handler error', e);
+        if (update.message.chat?.id) await send(update.message.chat.id, `The command failed: <code>${esc(e.message || 'unknown error')}</code>\nCheck Railway logs for details.`).catch(() => {});
+      }
+    }
   } catch (e) { console.error('telegram polling error', e.message); }
   setImmediate(pollTelegram);
 }
