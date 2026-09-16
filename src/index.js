@@ -14,8 +14,9 @@ const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30))
 const ARBITRAGE_STAKE = Math.max(0.01, Number(process.env.ARBITRAGE_STAKE || 100));
 const ARBITRAGE_MIN_MULTIPLE = Math.max(1, Number(process.env.ARBITRAGE_MIN_MULTIPLE || 2));
 const TRUSTED_MIN_PROFIT = 0.30;
+const TRUSTED_MIN_PROBABILITY = 0.70;
 const TRUSTED_MIN_SECONDS_LEFT = 30;
-const BUILD_VERSION = 'trusted-close-window-v1';
+const BUILD_VERSION = 'trusted-70pct-cutoff-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -159,7 +160,7 @@ function arbitrageText(m, hedge) {
 }
 
 function trustedText(m, side, result, stake) {
-  return `⭐ <b>TRUSTED-STYLE SIGNAL</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nPaper amount: <b>${money(stake)}</b>\nHigher implied side probability: <b>${pct(result.probability)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b> (<b>${(result.profit / stake * 100).toFixed(1)}%</b>)\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\n\nThis is a read-only filter, not a guarantee or financial advice. No trade was placed.`;
+  return `⭐ <b>TRUSTED-STYLE SIGNAL</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nMaximum configured paper amount: <b>${money(stake)}</b>\nCurrent implied chance: <b>${pct(result.probability)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b> (<b>${(result.profit / stake * 100).toFixed(1)}%</b>)\nTime left to order cutoff: <b>${timeLeft(m.cutoff)}</b>\n\nThis is a read-only filter, not a guarantee or financial advice. No trade was placed.`;
 }
 
 function resultText(chatId, filter) {
@@ -318,7 +319,7 @@ async function handleMessage(message) {
   const [rawCommand, a, b] = input.split(/\s+/);
   const command = rawCommand.toLowerCase().split('@')[0];
 
-  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/trusted on — choose the higher-probability side with at least 30% modeled profit\n/amount JOHN 250 — use $250 paper amount for JOHN\n/arbitrage on — enable two-sided hedge alerts\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
+  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/trusted on — higher-probability side with ≥70% chance, ≥30% modeled profit, and ≥30s to cutoff\n/amount JOHN 250 — use $250 paper amount for JOHN\n/arbitrage on — enable two-sided hedge alerts\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
   if (command === '/trade') return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (command === '/email') return submitEmail(chatId, a || '');
   if (command === '/resend') return resendOtp(chatId);
@@ -341,7 +342,7 @@ async function handleMessage(message) {
   }
   if (command === '/trusted') {
     const mode = String(a || '').toLowerCase();
-    if (mode === 'on') { state.trusted.add(String(chatId)); state.subscribers.add(String(chatId)); return send(chatId, 'Trusted-style signals enabled. I will choose the higher-implied-probability side only when modeled profit is at least 30%.'); }
+    if (mode === 'on') { state.trusted.add(String(chatId)); state.subscribers.add(String(chatId)); return send(chatId, 'Trusted-style signals enabled. I will choose the higher-implied-probability side only when chance is at least 70%, modeled profit is at least 30%, and at least 30 seconds remain before the order cutoff.'); }
     if (mode === 'off') { state.trusted.delete(String(chatId)); return send(chatId, 'Trusted-style signals disabled for this chat.'); }
     return send(chatId, `Trusted-style signals are <b>${state.trusted.has(String(chatId)) ? 'ON' : 'OFF'}</b>. Use <code>/trusted on</code> or <code>/trusted off</code>.`);
   }
@@ -364,7 +365,7 @@ async function handleMessage(message) {
   }
   if (command === '/alerts') { state.subscribers.add(String(chatId)); if (!state.thresholds.has(String(chatId))) state.thresholds.set(String(chatId), MIN_MULTIPLE); return send(chatId, `Automatic alerts enabled at your <b>${state.thresholds.get(String(chatId))}×+</b> opportunity threshold.`); }
   if (command === '/stop') { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat. Send /alerts to enable them again.'); }
-  if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nYour opportunity threshold: ${state.thresholds.get(String(chatId)) || MIN_MULTIPLE}×+\nTrusted-style signals: ${state.trusted.has(String(chatId)) ? 'ON (higher probability + 30% modeled profit)' : 'OFF'}\nTwo-sided hedge alerts: ${state.arbitrage.has(String(chatId)) ? 'ON' : 'OFF'}\nDefault hedge minimum: ${ARBITRAGE_MIN_MULTIPLE}×\nFee used: ${(FEE * 100).toFixed(2)}%`);
+  if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nYour opportunity threshold: ${state.thresholds.get(String(chatId)) || MIN_MULTIPLE}×+\nTrusted-style signals: ${state.trusted.has(String(chatId)) ? 'ON (≥70% chance + ≥30% modeled profit + 30s cutoff buffer)' : 'OFF'}\nTwo-sided hedge alerts: ${state.arbitrage.has(String(chatId)) ? 'ON' : 'OFF'}\nDefault hedge minimum: ${ARBITRAGE_MIN_MULTIPLE}×\nFee used: ${(FEE * 100).toFixed(2)}%`);
   if (command === '/result') return resultText(chatId, String(a || '').toLowerCase() === 'wins10m' ? 'wins10m' : undefined);
 
   if (command === '/markets') {
@@ -455,13 +456,13 @@ async function alertLoop() {
         }
       }
       if (state.trusted.size) {
-        const trustedSecondsToClose = (new Date(m.close).getTime() - Date.now()) / 1000;
-        if (!Number.isFinite(trustedSecondsToClose) || trustedSecondsToClose < TRUSTED_MIN_SECONDS_LEFT) continue;
+        const trustedSecondsToCutoff = (new Date(m.cutoff).getTime() - Date.now()) / 1000;
+        if (!Number.isFinite(trustedSecondsToCutoff) || trustedSecondsToCutoff < TRUSTED_MIN_SECONDS_LEFT) continue;
         const trustedSide = m.higher >= m.lower ? 'higher' : 'lower';
         for (const chatId of state.trusted) {
           const stake = paperAmount(chatId, m.symbol);
           const trustedResult = estimate(m, trustedSide, stake);
-          if (!trustedResult || trustedResult.profit / stake < TRUSTED_MIN_PROFIT) continue;
+          if (!trustedResult || trustedResult.probability < TRUSTED_MIN_PROBABILITY || trustedResult.profit / stake < TRUSTED_MIN_PROFIT) continue;
           const key = `${m.url}|trusted|${chatId}|${Math.round(stake * 100)}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
           if (state.sent.has(key)) continue;
           state.sent.set(key, Date.now());
