@@ -11,11 +11,11 @@ const FEE = Number(process.env.CADE_FEE || 0.03);
 const MAX_MARKETS = Math.max(1, Number(process.env.MAX_MARKETS || 30));
 const ALERT_STAKE = Math.max(0.01, Number(process.env.ALERT_STAKE || 100));
 const MIN_SECONDS_LEFT = Math.max(0, Number(process.env.MIN_SECONDS_LEFT || 30));
-const BUILD_VERSION = 'result-tracking-settlement-v1';
+const BUILD_VERSION = 'opportunity-filter-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
-const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map(), calls: new Map(), markets: [], lastScan: null, tradeSessions: new Map() };
+const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), thresholds: new Map(), sent: new Map(), calls: new Map(), markets: [], lastScan: null, tradeSessions: new Map() };
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -126,8 +126,8 @@ function marketLine(m, stake = 100) {
   return `• <a href="${esc(m.url)}">$${esc(m.symbol)}</a> — H ${pct(h?.probability)} → ${money(h?.totalReturn)} | L ${pct(l?.probability)} → ${money(l?.totalReturn)} | <b>time left: ${timeLeft(m.cutoff)}</b>`;
 }
 
-function alertText(m, side, result, stake = 100) {
-  return `🚨 <b>CADE ${MIN_MULTIPLE}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
+function alertText(m, side, result, stake = 100, threshold = MIN_MULTIPLE) {
+  return `🚨 <b>CADE ${threshold}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
 }
 
 function resultText(chatId, filter) {
@@ -286,15 +286,24 @@ async function handleMessage(message) {
   const [rawCommand, a, b] = input.split(/\s+/);
   const command = rawCommand.toLowerCase().split('@')[0];
 
-  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic 5×+ alerts\n/stop — disable automatic alerts');
+  if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
   if (command === '/trade') return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (command === '/email') return submitEmail(chatId, a || '');
   if (command === '/resend') return resendOtp(chatId);
   if (command === '/otp') return submitOtp(chatId, a || '');
   if (command === '/cancel') { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
-  if (command === '/alerts') { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
+  if (command === '/opportunity') {
+    const raw = String(a || '').toLowerCase().replace(/×/g, 'x');
+    const match = raw.match(/^(\d+(?:\.\d+)?)x?$/);
+    const threshold = match ? Number(match[1]) : NaN;
+    if (!Number.isFinite(threshold) || threshold < 1 || threshold > 1000) return send(chatId, 'Usage: <code>/opportunity 2x</code> (choose a multiple from 1x to 1000x).');
+    state.thresholds.set(String(chatId), threshold);
+    state.subscribers.add(String(chatId));
+    return send(chatId, `Opportunity filter set to <b>${threshold}×+</b>. Automatic alerts enabled for this chat.`);
+  }
+  if (command === '/alerts') { state.subscribers.add(String(chatId)); if (!state.thresholds.has(String(chatId))) state.thresholds.set(String(chatId), MIN_MULTIPLE); return send(chatId, `Automatic alerts enabled at your <b>${state.thresholds.get(String(chatId))}×+</b> opportunity threshold.`); }
   if (command === '/stop') { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat. Send /alerts to enable them again.'); }
-  if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
+  if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nYour opportunity threshold: ${state.thresholds.get(String(chatId)) || MIN_MULTIPLE}×+\nDefault threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
   if (command === '/result') return resultText(chatId, String(a || '').toLowerCase() === 'wins10m' ? 'wins10m' : undefined);
 
   if (command === '/markets') {
@@ -340,27 +349,38 @@ async function alertLoop() {
         const secondsLeft = (new Date(m.cutoff).getTime() - Date.now()) / 1000;
         if (!Number.isFinite(secondsLeft) || secondsLeft <= MIN_SECONDS_LEFT) continue;
         const result = estimate(m, side, ALERT_STAKE);
-        if (!result || result.multiple <= MIN_MULTIPLE) continue;
-        const key = `${m.url}|${side}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
-        if (state.sent.has(key)) continue;
-        state.sent.set(key, Date.now());
-        state.calls.set(key, {
-          key,
-          marketId: m.id,
-          symbol: m.symbol,
-          url: m.url,
-          side,
-          sideIndex: side === 'higher' ? 0 : 1,
-          stake: ALERT_STAKE,
-          multiple: result.multiple,
-          totalReturn: result.totalReturn,
-          profit: result.profit,
-          probability: result.probability,
-          alertedAt: Date.now(),
-          chatIds: new Set(state.subscribers),
-          status: 'pending'
-        });
-        for (const chatId of state.subscribers) await send(chatId, alertText(m, side, result, ALERT_STAKE));
+        if (!result) continue;
+        const recipients = new Map();
+        for (const chatId of state.subscribers) {
+          const threshold = state.thresholds.get(String(chatId)) || MIN_MULTIPLE;
+          if (result.multiple > threshold) {
+            if (!recipients.has(threshold)) recipients.set(threshold, new Set());
+            recipients.get(threshold).add(String(chatId));
+          }
+        }
+        for (const [threshold, chatIds] of recipients) {
+          const key = `${m.url}|${side}|${threshold}|${Math.round(m.higher)}|${Math.round(m.lower)}`;
+          if (state.sent.has(key)) continue;
+          state.sent.set(key, Date.now());
+          state.calls.set(key, {
+            key,
+            marketId: m.id,
+            symbol: m.symbol,
+            url: m.url,
+            side,
+            sideIndex: side === 'higher' ? 0 : 1,
+            stake: ALERT_STAKE,
+            threshold,
+            multiple: result.multiple,
+            totalReturn: result.totalReturn,
+            profit: result.profit,
+            probability: result.probability,
+            alertedAt: Date.now(),
+            chatIds,
+            status: 'pending'
+          });
+          for (const chatId of chatIds) await send(chatId, alertText(m, side, result, ALERT_STAKE, threshold));
+        }
       }
     }
     // Keep memory bounded while retaining enough state to prevent repeat spam.
