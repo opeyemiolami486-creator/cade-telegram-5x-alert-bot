@@ -18,6 +18,8 @@ const state = { offset: 0, subscribers: new Set(ALLOWED_CHAT_IDS), sent: new Map
 const money = n => Number.isFinite(n) ? `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const pct = n => Number.isFinite(n) ? `${(n * 100).toFixed(1)}%` : '—';
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const authDialog = page => page.getByRole('dialog');
+const visibleOtpField = page => authDialog(page).locator('input:visible:not([type="email"])').first();
 const timeLeft = iso => {
   const seconds = Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000));
   if (!Number.isFinite(seconds)) return 'unknown';
@@ -164,13 +166,13 @@ async function submitEmail(chatId, email) {
   if (!session || session.step !== 'email') return send(chatId, 'Start with <code>/trade SYMBOL higher 100</code>.');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return send(chatId, 'That email format is not valid. Try <code>/email you@example.com</code>.');
   await send(chatId, 'Submitting the email to Cade/Privy and waiting for the login response…');
-  const emailField = session.page.locator('input[autocomplete="email"]:visible, input[type="email"]:visible').last();
+  const emailField = authDialog(session.page).locator('input[autocomplete="email"]:visible, input[type="email"]:visible').last();
   await emailField.waitFor({ state: 'visible', timeout: 10000 });
   await emailField.fill(email);
   const submitButton = session.page.getByRole('button', { name: /EMAIL ME A CODE|CONTINUE|SEND CODE/i }).last();
   await submitButton.waitFor({ state: 'visible', timeout: 10000 });
   await submitButton.click({ timeout: 10000 });
-  await session.page.waitForTimeout(1500);
+  await session.page.waitForTimeout(1000);
   const visibleText = await session.page.locator('body').innerText();
   if (/captcha|verify you are human|robot|turnstile|recaptcha/i.test(visibleText)) {
     return send(chatId, 'Cade/Privy is requiring a CAPTCHA in the headless browser, so the OTP was not confirmed as sent. This cannot be safely bypassed. Use a manual Cade login/browser handoff, or try again later if the CAPTCHA is not shown.');
@@ -178,7 +180,9 @@ async function submitEmail(chatId, email) {
   if (/invalid email|error|failed|try again|unable/i.test(visibleText) && !/check your email|enter.*code|verification code/i.test(visibleText)) {
     return send(chatId, 'Cade/Privy returned a login error and no OTP screen appeared. Check the email address and Railway logs, then try /cancel followed by /trade again.');
   }
-  const codeVisible = await session.page.locator('input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first().isVisible().catch(() => false);
+  const codeField = visibleOtpField(session.page);
+  await codeField.waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
+  const codeVisible = await codeField.isVisible().catch(() => false);
   if (!codeVisible && !/check your email|enter.*code|verification code|code sent/i.test(visibleText)) {
     return send(chatId, 'Cade did not show its OTP entry screen, so delivery was not confirmed. Try /resend once, then check spam/junk and verify the email address.');
   }
@@ -199,7 +203,7 @@ async function submitOtp(chatId, otp) {
   const session = state.tradeSessions.get(String(chatId));
   if (!session || session.step !== 'otp') return send(chatId, 'No login session is waiting for an OTP. Start with /trade.');
   if (!/^\d{4,8}$/.test(otp)) return send(chatId, 'OTP should contain only 4–8 digits.');
-  const field = session.page.locator('input[autocomplete="one-time-code"]:visible, input[inputmode="numeric"]:visible, input[type="tel"]:visible').first();
+  const field = visibleOtpField(session.page);
   await field.waitFor({ state: 'visible', timeout: 10000 });
   await field.fill(otp);
   await field.press('Enter').catch(() => {});
