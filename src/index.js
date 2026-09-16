@@ -130,15 +130,22 @@ function alertText(m, side, result, stake = 100) {
   return `🚨 <b>CADE ${MIN_MULTIPLE}×+ OPPORTUNITY</b>\n\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: ${money(stake)}\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to place prediction: <b>${timeLeft(m.cutoff)}</b>\nPool: Higher ${money(m.higher)} / Lower ${money(m.lower)}\n\nRead-only estimate; no trade was placed.`;
 }
 
-function resultText(chatId) {
-  const calls = [...state.calls.values()].filter(call => call.chatIds.has(String(chatId))).sort((a, b) => b.alertedAt - a.alertedAt);
+function resultText(chatId, filter) {
+  const allCalls = [...state.calls.values()].filter(call => call.chatIds.has(String(chatId))).sort((a, b) => b.alertedAt - a.alertedAt);
+  const calls = filter === 'wins10m'
+    ? allCalls.filter(call => call.status === 'won' && Date.now() - call.resolvedAt <= 10 * 60 * 1000)
+    : allCalls;
   const won = calls.filter(call => call.status === 'won');
-  if (!calls.length) return send(chatId, 'No alert calls have been recorded for this chat yet. Calls are recorded only while the bot is running, and are verified after Cade settles the market.');
+  if (!calls.length) {
+    return send(chatId, filter === 'wins10m'
+      ? 'No winning alert calls were verified in the last 10 minutes.'
+      : 'No alert calls have been recorded for this chat yet. Calls are recorded only while the bot is running, and are verified after Cade settles the market.');
+  }
   const lines = calls.slice(0, 20).map(call => {
     const status = call.status === 'won' ? '✅ WON' : call.status === 'lost' ? '❌ LOST' : '⏳ PENDING';
     return `${status} <a href="${esc(call.url)}">$${esc(call.symbol)}</a> — ${call.side.toUpperCase()} — alert ${call.multiple.toFixed(2)}× — ${new Date(call.alertedAt).toLocaleString()}`;
   });
-  return send(chatId, `<b>Verified alert results</b>\n\nSuccessful settled calls: <b>${won.length}</b>\nTracked calls: <b>${calls.length}</b>\n\n${lines.join('\n')}\n\nThese are paper-call results based on the alert stake. The bot does not confirm that you placed a trade or received a payout.`);
+  return send(chatId, `<b>${filter === 'wins10m' ? 'Winning calls from the last 10 minutes' : 'Verified alert results'}</b>\n\nSuccessful settled calls: <b>${won.length}</b>\nTracked calls: <b>${calls.length}</b>\n\n${lines.join('\n')}\n\nThese are paper-call results based on the alert stake. The bot does not confirm that you placed a trade or received a payout.`);
 }
 
 async function telegram(method, body = {}) {
@@ -288,7 +295,7 @@ async function handleMessage(message) {
   if (command === '/alerts') { state.subscribers.add(String(chatId)); return send(chatId, `Automatic alerts enabled. I will notify you when a visible market estimates at least ${MIN_MULTIPLE}× total return.`); }
   if (command === '/stop') { state.subscribers.delete(String(chatId)); return send(chatId, 'Automatic alerts disabled for this chat. Send /alerts to enable them again.'); }
   if (command === '/status') return send(chatId, `Build: ${BUILD_VERSION}\nScanner: ${state.lastScan ? `last scan ${new Date(state.lastScan).toLocaleTimeString()}` : 'not scanned yet'}\nMarkets read: ${state.markets.length}\nAlert threshold: ${MIN_MULTIPLE}× total return\nFee used: ${(FEE * 100).toFixed(2)}%`);
-  if (command === '/result') return resultText(chatId);
+  if (command === '/result') return resultText(chatId, String(a || '').toLowerCase() === 'wins10m' ? 'wins10m' : undefined);
 
   if (command === '/markets') {
     const markets = state.markets.length ? state.markets : await scan();

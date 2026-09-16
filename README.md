@@ -14,6 +14,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/stop` — disable automatic alerts for this chat until `/alerts` is used again
 - `/status` — show scanner status
 - `/result` — list alert calls and their verified settled outcomes
+- `/result wins10m` — show only verified winning calls resolved in the last 10 minutes
 - `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
 - `/email you@example.com` — provide the Cade login email for the active preview
 - `/otp 123456` — provide the one-time code for the active preview
