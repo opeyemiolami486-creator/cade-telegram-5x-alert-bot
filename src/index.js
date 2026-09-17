@@ -213,7 +213,9 @@ async function submitPredictionInBrowser(session) {
 
   await page.waitForTimeout(750);
   const body = await page.locator('body').innerText().catch(() => '');
-  const success = /prediction (?:submitted|placed|confirmed)|successfully (?:predicted|submitted)|position (?:created|opened)/i.test(body)
+  const confirmedPosition = await page.locator('[data-testid="market-position-confirmed"]').isVisible().catch(() => false);
+  const success = /prediction (?:submitted|placed|confirmed)|successfully (?:predicted|submitted)|predicted\s+\$?[\d,.]+\s+(?:higher|lower)|position (?:created|opened)/i.test(body)
+    || confirmedPosition
     || (await amount.inputValue().catch(() => String(stake))) === '0';
   if (!success) {
     const status = body.match(/[^\n]*(?:error|failed|unable|insufficient|prediction|position)[^\n]*/gi)?.slice(-8).join(' | ') || 'no success status was shown';
