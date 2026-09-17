@@ -203,7 +203,12 @@ function paperTradeText(m, side, result, stake, tradeId) {
 
 async function submitPredictionInBrowser(session) {
   const { page, side, stake, market } = session;
-  await page.goto(market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(CADE_HOME, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const signInPrompt = page.getByText(/SIGN IN TO PLACE A PREDICTION/i).first();
+  if (await signInPrompt.isVisible().catch(() => false)) throw new Error('Cade still considers this browser signed out. Complete login in the Chromium window opened by the bot.');
+  const quickPredict = page.getByRole('button', { name: new RegExp(`quick\\s+predict\\s+on\\s+will\\s+\\$?${String(market.symbol).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s+close\\s+higher`, 'i') }).first();
+  await quickPredict.waitFor({ state: 'visible', timeout: 15000 });
+  await quickPredict.click({ timeout: 10000 });
   const amount = page.locator('#market-rail-ticket-amount');
   await amount.waitFor({ state: 'visible', timeout: 15000 });
   await amount.fill(String(stake));
