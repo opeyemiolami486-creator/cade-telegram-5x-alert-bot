@@ -1,8 +1,8 @@
 # Cade.market Telegram Monitor
 
-A **read-only** Telegram bot for Railway. It reads Cade.market's public market JSON endpoint, estimates returns using live HIGHER/LOWER pools and Cade's displayed 3% fee, responds to commands, and sends an alert when a $100 example stake exceeds the configured multiple.
+A Telegram bot for Railway. It reads Cade.market's public market JSON endpoint, estimates returns using live HIGHER/LOWER pools and Cade's displayed 3% fee, responds to commands, and sends an alert when a $100 example stake exceeds the configured multiple. Its alerting features are read-only; the explicit `/trade` flow can submit a paper prediction after manual Cade login.
 
-It does **not** log in to Cade, handle wallet keys, or place trades.
+It does **not** handle wallet keys or blockchain signing. It opens a visible Chromium session for manual Cade login and submits only through the authenticated paper-credit market controls when `SUBMIT_PREDICTIONS=true`.
 
 ## Telegram commands
 
@@ -25,7 +25,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/email you@example.com` — provide the Cade login email for the active preview
 - `/otp 123456` — provide the one-time code for the active preview
 - `/resend` — ask Cade/Privy to send the code again
-- `/cancel` — close the headless browser session without submitting
+- `/cancel` — close the visible browser session without submitting
 
 ## Railway setup
 
@@ -69,11 +69,11 @@ Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportuni
 
 ## Paper trades
 
-The `/trade SYMBOL higher|lower AMOUNT` command opens a temporary authenticated Cade browser session. After `/email` and `/otp`, it fills the amount and clicks the selected HIGHER/LOWER control on Cade's paper-credit tournament UI. A trade is recorded only after Cade confirms the submission, and it is settled by `/result` after the public market reports a winning outcome. Set `SUBMIT_PREDICTIONS=false` to restore preview-only behavior. No wallet seed phrase or private key is accepted or stored.
+The `/trade SYMBOL higher|lower AMOUNT` command opens a temporary visible authenticated Cade browser session. Complete login manually in that browser window; after login is detected, the bot fills the amount and clicks the selected HIGHER/LOWER control on Cade's paper-credit tournament UI. A trade is recorded only after Cade confirms the submission, and it is settled by `/result` after the public market reports a winning outcome. Set `SUBMIT_PREDICTIONS=false` to force preview-only behavior. No wallet seed phrase or private key is accepted or stored.
 
 ## Headless browser preview (legacy)
 
-The headless browser helpers use Telegram's OTP handoff and are intended for the paper-credit test site. Telegram commands sent as `/stop@your_bot` are supported.
+The legacy Telegram OTP handoff commands remain available for compatible sessions, but the current default flow is manual login in visible Chromium. Telegram commands sent as `/stop@your_bot` are supported.
 
 ## Caveats
 

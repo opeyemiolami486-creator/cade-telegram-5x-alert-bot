@@ -225,6 +225,24 @@ async function submitPredictionInBrowser(session) {
   }
 }
 
+async function submitAuthenticatedPrediction(chatId, session) {
+  await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const result = estimate(session.market, session.side, session.stake);
+  session.step = 'preview';
+  if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
+  if (!SUBMIT_PREDICTIONS) return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nSubmission is disabled because <code>SUBMIT_PREDICTIONS=false</code>.`);
+  try {
+    await submitPredictionInBrowser(session);
+    const tradeId = `live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    state.calls.set(tradeId, { key: tradeId, tradeId, marketId: session.market.id, symbol: session.market.symbol, url: session.market.url, side: session.side, sideIndex: session.side === 'higher' ? 0 : 1, stake: session.stake, multiple: result.multiple, totalReturn: result.totalReturn, profit: result.profit, probability: result.probability, alertedAt: Date.now(), chatIds: new Set([String(chatId)]), status: 'pending', paper: true, submitted: true });
+    session.step = 'submitted';
+    return send(chatId, `<b>PREDICTION SUBMITTED</b>\n\nTrade: <code>${esc(tradeId)}</code>\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b>\n\nCade confirmed the paper prediction in the authenticated browser session. Use /result after settlement.`);
+  } catch (error) {
+    console.error('prediction submission failed', error);
+    return send(chatId, `Login succeeded, but Cade did not confirm the prediction. No result was recorded.\n\n<code>${esc(error.message)}</code>\n\nUse /cancel and try /trade again while the market is still open.`);
+  }
+}
+
 async function submitPaperTrade(chatId, symbol, side, stake) {
   if (!['higher', 'lower'].includes(side) || !(stake > 0) || !Number.isFinite(stake)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   const markets = state.markets.length ? state.markets : await scan();
@@ -304,11 +322,7 @@ async function waitForManualLogin(chatId) {
       await send(chatId, 'Manual Cade login timed out. Use /cancel and /trade again. No trade was submitted.');
       return endTradeSession(chatId);
     }
-    await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    const result = estimate(session.market, session.side, session.stake);
-    session.step = 'preview';
-    if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
-    return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nManual Cade login completed. The market page is open in the visible Chromium window. This bot will not click final trade or wallet-signing controls.\n\nUse /cancel to close the session.`);
+    return submitAuthenticatedPrediction(chatId, session);
   } catch (error) {
     console.error('manual login error', error);
     await send(chatId, `Manual login could not continue: <code>${esc(error.message || 'unknown error')}</code>`).catch(() => {});
@@ -377,21 +391,7 @@ async function submitOtp(chatId, otp) {
   if (/invalid|incorrect|expired|try again/i.test(loginText) && await field.isVisible().catch(() => false)) {
     return send(chatId, 'Cade rejected that OTP. Check the latest code in your inbox and try <code>/otp 123456</code> again, or use /resend.');
   }
-  await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  const result = estimate(session.market, session.side, session.stake);
-  session.step = 'preview';
-  if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
-  if (!SUBMIT_PREDICTIONS) return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nSubmission is disabled because <code>SUBMIT_PREDICTIONS=false</code>.`);
-  try {
-    await submitPredictionInBrowser(session);
-    const tradeId = `live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    state.calls.set(tradeId, { key: tradeId, tradeId, marketId: session.market.id, symbol: session.market.symbol, url: session.market.url, side: session.side, sideIndex: session.side === 'higher' ? 0 : 1, stake: session.stake, multiple: result.multiple, totalReturn: result.totalReturn, profit: result.profit, probability: result.probability, alertedAt: Date.now(), chatIds: new Set([String(chatId)]), status: 'pending', paper: true, submitted: true });
-    session.step = 'submitted';
-    return send(chatId, `<b>PREDICTION SUBMITTED</b>\n\nTrade: <code>${esc(tradeId)}</code>\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b>\n\nCade confirmed the paper prediction in the authenticated browser session. Use /result after settlement.`);
-  } catch (error) {
-    console.error('prediction submission failed', error);
-    return send(chatId, `Login succeeded, but Cade did not confirm the prediction. No result was recorded.\n\n<code>${esc(error.message)}</code>\n\nUse /cancel and try /trade again while the market is still open.`);
-  }
+  return submitAuthenticatedPrediction(chatId, session);
 }
 
 async function endTradeSession(chatId) {
