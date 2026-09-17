@@ -1,4 +1,5 @@
 node_modules/
+cade-browser-profile/
 .env
 .env.*
 !.env.example

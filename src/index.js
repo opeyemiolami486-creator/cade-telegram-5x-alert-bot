@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import * as cheerio from 'cheerio';
 import { chromium } from 'playwright';
+import path from 'node:path';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ALLOWED_CHAT_IDS = new Set((process.env.ALLOWED_CHAT_IDS || '').split(',').map(x => x.trim()).filter(Boolean));
@@ -20,6 +21,7 @@ const SUBMIT_PREDICTIONS = String(process.env.SUBMIT_PREDICTIONS || 'true').toLo
 const BUILD_VERSION = 'live-credit-predictions-v2';
 const BROWSER_HEADLESS = String(process.env.BROWSER_HEADLESS || 'false').toLowerCase() === 'true';
 const MANUAL_LOGIN_TIMEOUT_MS = Math.max(60_000, Number(process.env.MANUAL_LOGIN_TIMEOUT_MS || 10 * 60 * 1000));
+const CADE_PROFILE_DIR = process.env.CADE_PROFILE_DIR || path.join(process.cwd(), 'cade-browser-profile');
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -281,25 +283,24 @@ async function beginTradePreview(chatId, symbol, side, stake) {
   if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
   await send(chatId, `Starting a visible Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
-  let browser;
+  let context;
   try {
-    browser = await Promise.race([
-      chromium.launch({
+    context = await Promise.race([
+      chromium.launchPersistentContext(CADE_PROFILE_DIR, {
         headless: BROWSER_HEADLESS,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Chromium launch timed out after 20 seconds; check Railway Playwright installation logs.')), 20000))
     ]);
-    await send(chatId, BROWSER_HEADLESS ? 'Headless Chromium started. Loading Cade login…' : 'Chromium opened on your laptop. Complete Cade login manually in that window; do not send your email or OTP in Telegram.');
-    const context = await browser.newContext();
+    await send(chatId, BROWSER_HEADLESS ? 'Headless Chromium started with the saved Cade profile. Loading Cade login…' : 'Chromium opened on your laptop with the saved Cade profile. Complete Cade login manually if requested; do not send your email or OTP in Telegram.');
     const page = await context.newPage();
-    state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'manual-login' });
+    state.tradeSessions.set(String(chatId), { browser: context, context, page, market, side, stake, createdAt: Date.now(), step: 'manual-login' });
     await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await send(chatId, `Cade login page is open on the laptop. Log in manually in Chromium, then leave the browser open. I will continue automatically after login (up to ${Math.round(MANUAL_LOGIN_TIMEOUT_MS / 60000)} minutes).`);
     void waitForManualLogin(chatId);
     return;
   } catch (error) {
-    if (browser) await browser.close().catch(() => {});
+    if (context) await context.close().catch(() => {});
     state.tradeSessions.delete(String(chatId));
     throw error;
   }

@@ -71,6 +71,8 @@ Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportuni
 
 The `/trade SYMBOL higher|lower AMOUNT` command opens a temporary visible authenticated Cade browser session. Complete login manually in that browser window; after login is detected, the bot fills the amount and clicks the selected HIGHER/LOWER control on Cade's paper-credit tournament UI. A trade is recorded only after Cade confirms the submission, and it is settled by `/result` after the public market reports a winning outcome. Set `SUBMIT_PREDICTIONS=false` to force preview-only behavior. No wallet seed phrase or private key is accepted or stored.
 
+The bot uses a persistent Playwright Chromium profile in `CADE_PROFILE_DIR` (by default, `./cade-browser-profile`). This preserves Cade cookies and local storage when the bot restarts or closes a trade session, so you normally log in only once. Cade can still expire or revoke a session server-side; if that happens, complete login again in the visible browser. Do not copy, upload, or share the profile directory because it may contain active login cookies.
+
 ## Headless browser preview (legacy)
 
 The legacy Telegram OTP handoff commands remain available for compatible sessions, but the current default flow is manual login in visible Chromium. Telegram commands sent as `/stop@your_bot` are supported.
