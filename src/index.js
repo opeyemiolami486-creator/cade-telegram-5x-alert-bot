@@ -16,7 +16,7 @@ const ARBITRAGE_MIN_MULTIPLE = Math.max(1, Number(process.env.ARBITRAGE_MIN_MULT
 const TRUSTED_MIN_PROFIT = 0.30;
 const TRUSTED_MIN_PROBABILITY = 0.70;
 const TRUSTED_MIN_SECONDS_LEFT = 30;
-const BUILD_VERSION = 'trusted-70pct-cutoff-v1';
+const BUILD_VERSION = 'paper-trades-v1';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -192,6 +192,41 @@ async function send(chatId, text) {
   await telegram('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
+function paperTradeText(m, side, result, stake, tradeId) {
+  return `✅ <b>PAPER TRADE SUBMITTED</b>\n\nTrade: <code>${esc(tradeId)}</code>\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: <b>${money(stake)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to cutoff: <b>${timeLeft(m.cutoff)}</b>\n\nThis is an in-memory paper trade for testing only. No wallet, broker, or live order was used. Use /result to check it after the market settles.`;
+}
+
+async function submitPaperTrade(chatId, symbol, side, stake) {
+  if (!['higher', 'lower'].includes(side) || !(stake > 0) || !Number.isFinite(stake)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
+  const markets = state.markets.length ? state.markets : await scan();
+  const market = markets.find(m => m.symbol.toLowerCase() === String(symbol || '').toLowerCase());
+  if (!market) return send(chatId, `I cannot find an open market for <b>${esc(symbol || '')}</b>. Send /markets first and use the exact token symbol.`);
+  const secondsLeft = (new Date(market.cutoff).getTime() - Date.now()) / 1000;
+  if (!Number.isFinite(secondsLeft) || secondsLeft <= 0) return send(chatId, `The <b>$${esc(market.symbol)}</b> market is already closed for new predictions.`);
+  const result = estimate(market, side, stake);
+  if (!result) return send(chatId, 'The market pools are not readable right now; no paper trade was submitted.');
+  const tradeId = `paper-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  state.calls.set(tradeId, {
+    key: tradeId,
+    tradeId,
+    marketId: market.id,
+    symbol: market.symbol,
+    url: market.url,
+    side,
+    sideIndex: side === 'higher' ? 0 : 1,
+    stake,
+    multiple: result.multiple,
+    totalReturn: result.totalReturn,
+    profit: result.profit,
+    probability: result.probability,
+    alertedAt: Date.now(),
+    chatIds: new Set([String(chatId)]),
+    status: 'pending',
+    paper: true
+  });
+  return send(chatId, paperTradeText(market, side, result, stake, tradeId));
+}
+
 async function beginTradePreview(chatId, symbol, side, stake) {
   if (!state.markets.length) await scan();
   const market = state.markets.find(m => m.symbol.toLowerCase() === symbol.toLowerCase());
@@ -320,7 +355,7 @@ async function handleMessage(message) {
   const command = rawCommand.toLowerCase().split('@')[0];
 
   if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/trusted on — higher-probability side with ≥70% chance, ≥30% modeled profit, and ≥30s to cutoff\n/amount JOHN 250 — use $250 paper amount for JOHN\n/arbitrage on — enable two-sided hedge alerts\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
-  if (command === '/trade') return beginTradePreview(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
+  if (command === '/trade') return submitPaperTrade(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (command === '/email') return submitEmail(chatId, a || '');
   if (command === '/resend') return resendOtp(chatId);
   if (command === '/otp') return submitOtp(chatId, a || '');

@@ -21,7 +21,7 @@ It does **not** log in to Cade, handle wallet keys, or place trades.
 - `/status` — show scanner status
 - `/result` — list alert calls and their verified settled outcomes
 - `/result wins10m` — show only verified winning calls resolved in the last 10 minutes
-- `/trade JOHN higher 100` — open a headless Cade login and prepare a trade preview
+- `/trade JOHN higher 100` — submit an in-memory paper trade for the open market
 - `/email you@example.com` — provide the Cade login email for the active preview
 - `/otp 123456` — provide the one-time code for the active preview
 - `/resend` — ask Cade/Privy to send the code again
@@ -67,9 +67,13 @@ Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportuni
 
 `/arbitrage on` enables a separate two-sided hedge scan. It solves for the Higher/Lower stake split that equalizes the modeled payout and alerts only when the minimum payout across either outcome is at least `ARBITRAGE_MIN_MULTIPLE` times the combined paper stake. This is a strict mathematical screen, not a guarantee: pools can move, fees and limits can differ, both accounts may not execute, and Cade may prohibit multi-account hedging. It remains read-only and never places either trade.
 
-## Headless browser preview
+## Paper trades
 
-The `/trade` workflow runs Chromium headlessly on Railway, so no desktop browser is needed on the phone. It waits for Cade's Privy login modal to hydrate, opens the visible email-login form, accepts the email and one-time code through Telegram, waits for the OTP screen to complete, navigates to the selected market, and sends a fresh preview with the time remaining. The current implementation deliberately stops before clicking any final trade or wallet-signing control. It does not store the OTP after the session and does not accept passwords, seed phrases, or private keys. Telegram commands sent as `/stop@your_bot` are also supported.
+The `/trade SYMBOL higher|lower AMOUNT` command now records a paper trade immediately after reading the current public market pools. It returns a trade ID, modeled payout, and cutoff time, and the trade is settled by `/result` after the public market reports a winning outcome. Paper trades are held in memory and reset when the service restarts. No wallet, broker, authenticated trading endpoint, or live order is used.
+
+## Headless browser preview (legacy)
+
+The legacy headless preview helpers remain in the source for troubleshooting, but `/trade` no longer opens a login session. Telegram commands sent as `/stop@your_bot` are supported.
 
 ## Caveats
 
