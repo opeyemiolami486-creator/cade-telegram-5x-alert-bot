@@ -16,7 +16,8 @@ const ARBITRAGE_MIN_MULTIPLE = Math.max(1, Number(process.env.ARBITRAGE_MIN_MULT
 const TRUSTED_MIN_PROFIT = 0.30;
 const TRUSTED_MIN_PROBABILITY = 0.70;
 const TRUSTED_MIN_SECONDS_LEFT = 30;
-const BUILD_VERSION = 'paper-trades-v1';
+const SUBMIT_PREDICTIONS = String(process.env.SUBMIT_PREDICTIONS || 'true').toLowerCase() !== 'false';
+const BUILD_VERSION = 'live-credit-predictions-v2';
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -196,6 +197,30 @@ function paperTradeText(m, side, result, stake, tradeId) {
   return `✅ <b>PAPER TRADE SUBMITTED</b>\n\nTrade: <code>${esc(tradeId)}</code>\n<a href="${esc(m.url)}">$${esc(m.symbol)}</a> — <b>${side.toUpperCase()}</b>\nStake: <b>${money(stake)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b>\nCurrent implied chance: ${pct(result.probability)}\nTime left to cutoff: <b>${timeLeft(m.cutoff)}</b>\n\nThis is an in-memory paper trade for testing only. No wallet, broker, or live order was used. Use /result to check it after the market settles.`;
 }
 
+async function submitPredictionInBrowser(session) {
+  const { page, side, stake, market } = session;
+  await page.goto(market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const amount = page.locator('#market-rail-ticket-amount');
+  await amount.waitFor({ state: 'visible', timeout: 15000 });
+  await amount.fill(String(stake));
+  const sideButton = page.getByRole('button', { name: new RegExp(`(?:predict\\s+)?${side}`, 'i') }).last();
+  await sideButton.waitFor({ state: 'visible', timeout: 15000 });
+  await sideButton.click({ timeout: 10000 });
+
+  // Credits-mode may show a confirmation dialog after the side is selected.
+  const confirm = page.getByRole('button', { name: /^(confirm|submit prediction|place prediction|confirm prediction)$/i }).last();
+  if (await confirm.isVisible().catch(() => false)) await confirm.click({ timeout: 10000 });
+
+  await page.waitForTimeout(750);
+  const body = await page.locator('body').innerText().catch(() => '');
+  const success = /prediction (?:submitted|placed|confirmed)|successfully (?:predicted|submitted)|position (?:created|opened)/i.test(body)
+    || (await amount.inputValue().catch(() => String(stake))) === '0';
+  if (!success) {
+    const status = body.match(/[^\n]*(?:error|failed|unable|insufficient|prediction|position)[^\n]*/gi)?.slice(-8).join(' | ') || 'no success status was shown';
+    throw new Error(`Cade did not confirm the prediction submission: ${status.slice(0, 900)}`);
+  }
+}
+
 async function submitPaperTrade(chatId, symbol, side, stake) {
   if (!['higher', 'lower'].includes(side) || !(stake > 0) || !Number.isFinite(stake)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   const markets = state.markets.length ? state.markets : await scan();
@@ -331,7 +356,17 @@ async function submitOtp(chatId, otp) {
   const result = estimate(session.market, session.side, session.stake);
   session.step = 'preview';
   if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
-  return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nThe browser is logged in and the market page is open headlessly, but this bot will not click the final trade or wallet-signing controls. This protects you from accidental real-money orders.\n\nUse /cancel to close the session.`);
+  if (!SUBMIT_PREDICTIONS) return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nSubmission is disabled because <code>SUBMIT_PREDICTIONS=false</code>.`);
+  try {
+    await submitPredictionInBrowser(session);
+    const tradeId = `live-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    state.calls.set(tradeId, { key: tradeId, tradeId, marketId: session.market.id, symbol: session.market.symbol, url: session.market.url, side: session.side, sideIndex: session.side === 'higher' ? 0 : 1, stake: session.stake, multiple: result.multiple, totalReturn: result.totalReturn, profit: result.profit, probability: result.probability, alertedAt: Date.now(), chatIds: new Set([String(chatId)]), status: 'pending', paper: true, submitted: true });
+    session.step = 'submitted';
+    return send(chatId, `<b>PREDICTION SUBMITTED</b>\n\nTrade: <code>${esc(tradeId)}</code>\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nModeled total return: <b>${money(result.totalReturn)}</b>\nModeled profit: <b>${money(result.profit)}</b>\n\nCade confirmed the paper prediction in the authenticated browser session. Use /result after settlement.`);
+  } catch (error) {
+    console.error('prediction submission failed', error);
+    return send(chatId, `Login succeeded, but Cade did not confirm the prediction. No result was recorded.\n\n<code>${esc(error.message)}</code>\n\nUse /cancel and try /trade again while the market is still open.`);
+  }
 }
 
 async function endTradeSession(chatId) {
@@ -355,7 +390,7 @@ async function handleMessage(message) {
   const command = rawCommand.toLowerCase().split('@')[0];
 
   if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/trusted on — higher-probability side with ≥70% chance, ≥30% modeled profit, and ≥30s to cutoff\n/amount JOHN 250 — use $250 paper amount for JOHN\n/arbitrage on — enable two-sided hedge alerts\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
-  if (command === '/trade') return submitPaperTrade(chatId, a, String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
+  if (command === '/trade') return beginTradePreview(chatId, String(a || '').toUpperCase(), String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
   if (command === '/email') return submitEmail(chatId, a || '');
   if (command === '/resend') return resendOtp(chatId);
   if (command === '/otp') return submitOtp(chatId, a || '');

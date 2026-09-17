@@ -69,12 +69,12 @@ Each chat can choose its own alert threshold with `/opportunity 2x`, `/opportuni
 
 ## Paper trades
 
-The `/trade SYMBOL higher|lower AMOUNT` command now records a paper trade immediately after reading the current public market pools. It returns a trade ID, modeled payout, and cutoff time, and the trade is settled by `/result` after the public market reports a winning outcome. Paper trades are held in memory and reset when the service restarts. No wallet, broker, authenticated trading endpoint, or live order is used.
+The `/trade SYMBOL higher|lower AMOUNT` command opens a temporary authenticated Cade browser session. After `/email` and `/otp`, it fills the amount and clicks the selected HIGHER/LOWER control on Cade's paper-credit tournament UI. A trade is recorded only after Cade confirms the submission, and it is settled by `/result` after the public market reports a winning outcome. Set `SUBMIT_PREDICTIONS=false` to restore preview-only behavior. No wallet seed phrase or private key is accepted or stored.
 
 ## Headless browser preview (legacy)
 
-The legacy headless preview helpers remain in the source for troubleshooting, but `/trade` no longer opens a login session. Telegram commands sent as `/stop@your_bot` are supported.
+The headless browser helpers use Telegram's OTP handoff and are intended for the paper-credit test site. Telegram commands sent as `/stop@your_bot` are supported.
 
 ## Caveats
 
-Cade has not publicly documented a complete authenticated trading API. The bot therefore does not place predictions. The return calculation is an estimate based on visible pool totals, the displayed fee, and a pari-mutuel pool model; verify the final amount on Cade before risking funds.
+Cade's authenticated client uses a browser-mediated paper-credit submission flow. The bot submits only through the visible Cade market controls after login; it does not call undocumented wallet endpoints, handle seed phrases, or sign blockchain transactions. The return calculation is an estimate based on visible pool totals, the displayed fee, and a pari-mutuel pool model.
