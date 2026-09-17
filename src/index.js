@@ -18,6 +18,8 @@ const TRUSTED_MIN_PROBABILITY = 0.70;
 const TRUSTED_MIN_SECONDS_LEFT = 30;
 const SUBMIT_PREDICTIONS = String(process.env.SUBMIT_PREDICTIONS || 'true').toLowerCase() !== 'false';
 const BUILD_VERSION = 'live-credit-predictions-v2';
+const BROWSER_HEADLESS = String(process.env.BROWSER_HEADLESS || 'false').toLowerCase() === 'true';
+const MANUAL_LOGIN_TIMEOUT_MS = Math.max(60_000, Number(process.env.MANUAL_LOGIN_TIMEOUT_MS || 10 * 60 * 1000));
 
 if (!TOKEN) throw new Error('Missing TELEGRAM_BOT_TOKEN');
 
@@ -260,36 +262,57 @@ async function beginTradePreview(chatId, symbol, side, stake) {
   if (!market) return send(chatId, `I cannot find an open market for <b>${esc(symbol)}</b>. Send /markets first and use the exact token symbol.`);
   if (!['higher', 'lower'].includes(side) || !(stake > 0)) return send(chatId, 'Usage: <code>/trade JOHN higher 100</code>');
   if (state.tradeSessions.has(String(chatId))) await endTradeSession(chatId);
-  await send(chatId, `Starting a headless Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
+  await send(chatId, `Starting a visible Cade browser for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b>…`);
   let browser;
   try {
     browser = await Promise.race([
       chromium.launch({
-        headless: true,
+        headless: BROWSER_HEADLESS,
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
       }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Chromium launch timed out after 20 seconds; check Railway Playwright installation logs.')), 20000))
     ]);
-    await send(chatId, 'Headless Chromium started on Railway. Loading Cade login…');
+    await send(chatId, BROWSER_HEADLESS ? 'Headless Chromium started. Loading Cade login…' : 'Chromium opened on your laptop. Complete Cade login manually in that window; do not send your email or OTP in Telegram.');
     const context = await browser.newContext();
     const page = await context.newPage();
-    state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'email' });
+    state.tradeSessions.set(String(chatId), { browser, context, page, market, side, stake, createdAt: Date.now(), step: 'manual-login' });
     await page.goto(`${CADE_HOME}login`, { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await send(chatId, 'Cade login page loaded. Opening email login…');
-    const emailButton = page.getByRole('button', { name: /SIGN IN WITH EMAIL/i });
-    try {
-      await emailButton.waitFor({ state: 'visible', timeout: 15000 });
-    } catch (firstError) {
-      console.warn('Cade login modal did not hydrate on first load; retrying once', firstError.message);
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 });
-      await emailButton.waitFor({ state: 'visible', timeout: 15000 });
-    }
-    await emailButton.click({ timeout: 10000 });
-    return send(chatId, `Headless Cade browser ready for <b>$${esc(market.symbol)} ${side.toUpperCase()}</b> with <b>${money(stake)}</b>.\n\nSend your email with:\n<code>/email you@example.com</code>\n\nYour OTP will be used only in this temporary browser session and will not be saved.`);
+    await send(chatId, `Cade login page is open on the laptop. Log in manually in Chromium, then leave the browser open. I will continue automatically after login (up to ${Math.round(MANUAL_LOGIN_TIMEOUT_MS / 60000)} minutes).`);
+    void waitForManualLogin(chatId);
+    return;
   } catch (error) {
     if (browser) await browser.close().catch(() => {});
     state.tradeSessions.delete(String(chatId));
     throw error;
+  }
+}
+
+async function waitForManualLogin(chatId) {
+  const session = state.tradeSessions.get(String(chatId));
+  if (!session || session.step !== 'manual-login') return;
+  const deadline = Date.now() + MANUAL_LOGIN_TIMEOUT_MS;
+  try {
+    while (Date.now() < deadline) {
+      if (session.page.isClosed()) throw new Error('The Chromium window was closed before Cade login completed.');
+      const dialog = session.page.locator('[role="dialog"]');
+      const dialogText = await dialog.innerText().catch(() => '');
+      const loginUiVisible = await dialog.isVisible().catch(() => false) && /sign in|email|verification|one-time|google/i.test(dialogText);
+      if (!loginUiVisible) break;
+      await session.page.waitForTimeout(1000);
+    }
+    if (Date.now() >= deadline) {
+      await send(chatId, 'Manual Cade login timed out. Use /cancel and /trade again. No trade was submitted.');
+      return endTradeSession(chatId);
+    }
+    await session.page.goto(session.market.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const result = estimate(session.market, session.side, session.stake);
+    session.step = 'preview';
+    if (!result) return send(chatId, 'Login completed, but the market data is no longer available. The preview was not submitted.');
+    return send(chatId, `<b>TRADE PREVIEW — NOT SUBMITTED</b>\n\nToken: <b>$${esc(session.market.symbol)}</b>\nSide: <b>${session.side.toUpperCase()}</b>\nStake: <b>${money(session.stake)}</b>\nEstimated total return: <b>${money(result.totalReturn)}</b>\nEstimated profit: <b>${money(result.profit)}</b>\nTime left: <b>${timeLeft(session.market.cutoff)}</b>\n\nManual Cade login completed. The market page is open in the visible Chromium window. This bot will not click final trade or wallet-signing controls.\n\nUse /cancel to close the session.`);
+  } catch (error) {
+    console.error('manual login error', error);
+    await send(chatId, `Manual login could not continue: <code>${esc(error.message || 'unknown error')}</code>`).catch(() => {});
+    return endTradeSession(chatId);
   }
 }
 
@@ -393,10 +416,10 @@ async function handleMessage(message) {
 
   if (command === '/start') return send(chatId, '<b>Cade market monitor</b>\n\nCommands:\n/markets — current markets and estimates\n/estimate higher 100 — estimate a $100 HIGHER prediction\n/estimate lower 100 — estimate a $100 LOWER prediction\n/opportunity 2x — alert this chat at 2×+ estimated return\n/trusted on — higher-probability side with ≥70% chance, ≥30% modeled profit, and ≥30s to cutoff\n/amount JOHN 250 — use $250 paper amount for JOHN\n/arbitrage on — enable two-sided hedge alerts\n/status — scanner status\n/result — verified results for alert calls\n/alerts — enable automatic alerts\n/stop — disable automatic alerts');
   if (command === '/trade') return beginTradePreview(chatId, String(a || '').toUpperCase(), String(b || '').toLowerCase(), Number(input.split(/\s+/)[3]));
-  if (command === '/email') return submitEmail(chatId, a || '');
+  if (command === '/email') return send(chatId, 'Enter your Cade email directly in the visible Chromium window, not in Telegram.');
   if (command === '/resend') return resendOtp(chatId);
-  if (command === '/otp') return submitOtp(chatId, a || '');
-  if (command === '/cancel') { await endTradeSession(chatId); return send(chatId, 'Headless Cade session closed. No trade was submitted.'); }
+  if (command === '/otp') return send(chatId, 'Enter the Cade OTP directly in the visible Chromium window, not in Telegram.');
+  if (command === '/cancel') { await endTradeSession(chatId); return send(chatId, 'Visible Cade browser session closed. No trade was submitted.'); }
   if (command === '/opportunity') {
     const raw = String(a || '').toLowerCase().replace(/×/g, 'x');
     const match = raw.match(/^(\d+(?:\.\d+)?)x?$/);
